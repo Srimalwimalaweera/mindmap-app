@@ -4,7 +4,7 @@ import { signInWithPopup } from "firebase/auth";
 import { auth, googleProvider } from "@/lib/firebase";
 import { useState } from "react";
 
-export const runtime = 'edge';
+
 
 export default function LoginPage() {
     const [error, setError] = useState<string | null>(null);

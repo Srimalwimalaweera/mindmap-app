@@ -8,7 +8,7 @@ import type { MindMapData } from './services/mindmapService';
 import { getUserMindMaps, createMindMap } from './services/mindmapService';
 import Image from 'next/image';
 
-export const runtime = 'edge';
+
 
 export default function Dashboard() {
   const [maps, setMaps] = useState<MindMapData[]>([]);
