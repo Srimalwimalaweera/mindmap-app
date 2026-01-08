@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import styles from './LandingPage.module.css';
 
 interface LandingPageProps {
@@ -7,11 +8,27 @@ interface LandingPageProps {
 export default function LandingPage({ onGetStarted }: LandingPageProps) {
     return (
         <div className={styles.landingContainer}>
+            {/* Top Right Login Button */}
+            <div className={styles.topRight}>
+                <button
+                    onClick={onGetStarted}
+                    className={styles.glassBtn}
+                >
+                    Login / Sign Up
+                </button>
+            </div>
+
             <div className={styles.logoContainer}>
                 <div className={styles.logoWrapper}>
                     <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
                         width="200" height="200" viewBox="0 0 128 128" enableBackground="new 0 0 128 128" xmlSpace="preserve">
-                        <path fill="#FFFFFF" opacity="1.000000" stroke="none"
+                        <defs>
+                            <linearGradient id="logoGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stopColor="#3b82f6" stopOpacity="1" /> {/* Blue-500 */}
+                                <stop offset="100%" stopColor="#9333ea" stopOpacity="1" /> {/* Purple-600 */}
+                            </linearGradient>
+                        </defs>
+                        <path className={styles.animatedLogo} fill="url(#logoGradient)" opacity="1.000000" stroke="none"
                             d="
                 M76.688866,109.921104 
                     C88.050018,115.331482 100.131790,117.192719 112.584740,117.125877 
@@ -39,7 +56,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                     C30.057989,73.097160 40.864723,73.077866 51.840267,73.077866 
                     C53.987484,89.401680 61.400532,101.920280 76.688866,109.921104 
                 z"/>
-                        <path fill="#F5E41C" opacity="1.000000" stroke="none"
+                        <path fill="#F5E41C" opacity="1.000000" stroke="none" className={styles.animatedLogo}
                             d="
                 M76.354416,109.751411 
                     C61.400532,101.920280 53.987484,89.401680 51.840267,73.077866 
@@ -78,6 +95,23 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                 >
                     Get Started
                 </button>
+            </div>
+
+            {/* Bottom Left Links */}
+            <div className={styles.bottomLeft}>
+                <Link href="/terms" className={styles.footerLink}>
+                    Terms & Conditions
+                </Link>
+                <Link href="/privacy" className={styles.footerLink}>
+                    Privacy Policy
+                </Link>
+            </div>
+
+            {/* Bottom Right About Button */}
+            <div className={styles.bottomRight}>
+                <Link href="/about" className={styles.glassBtn}>
+                    About
+                </Link>
             </div>
         </div>
     );

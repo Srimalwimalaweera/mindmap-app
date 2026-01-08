@@ -6,6 +6,8 @@
     background: linear-gradient(135deg, #1e1e2e 0%, #2d1b3d 100%);
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     width: 100%;
+    position: relative;
+    overflow: hidden;
 }
 
 .logoContainer {
@@ -24,49 +26,20 @@
 
 .logoWrapper svg {
     filter: drop-shadow(0 10px 30px rgba(255, 0, 150, 0.4));
+    overflow: visible;
 }
 
-/* Animated lines */
-.euroLine {
-    animation: lineGlow 3s ease-in-out infinite;
+.animatedLogo {
+    animation: logoPulse 3s ease-in-out infinite alternate;
 }
 
-.line1 {
-    animation-delay: 0s;
-}
+@keyframes logoPulse {
+    0% {
+        filter: drop-shadow(0 0 2px rgba(59, 130, 246, 0.5));
+    }
 
-.line2 {
-    animation-delay: 0.3s;
-}
-
-/* Euro curve animation */
-.euroCurve {
-    animation: curveGlow 4s ease-in-out infinite;
-}
-
-@keyframes lineGlow {
-
-    0%,
     100% {
-        opacity: 0.9;
-        filter: drop-shadow(0 0 8px rgba(255, 0, 150, 0.6));
-    }
-
-    50% {
-        opacity: 1;
-        filter: drop-shadow(0 0 20px rgba(255, 0, 150, 1));
-    }
-}
-
-@keyframes curveGlow {
-
-    0%,
-    100% {
-        filter: drop-shadow(0 0 10px rgba(200, 0, 255, 0.5));
-    }
-
-    50% {
-        filter: drop-shadow(0 0 25px rgba(200, 0, 255, 0.9));
+        filter: drop-shadow(0 0 15px rgba(147, 51, 234, 0.8));
     }
 }
 
@@ -86,11 +59,13 @@
     color: #fff;
     margin-top: 30px;
     font-size: 2em;
-    background: linear-gradient(135deg, #ff0080, #ff8c00, #c000ff);
+    background: linear-gradient(135deg, #ff0080 0%, #ff8c00 25%, #ffffff 50%, #ff8c00 75%, #c000ff 100%);
+    background-size: 200% auto;
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
     font-weight: bold;
+    animation: shimmer 3s linear infinite;
 }
 
 .subtitle {
@@ -98,4 +73,72 @@
     margin-top: 10px;
     font-size: 1.1em;
     letter-spacing: 2px;
+    background: linear-gradient(to right, rgba(255, 255, 255, 0.5) 0%, #fff 50%, rgba(255, 255, 255, 0.5) 100%);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    animation: shimmer 3s linear infinite reverse;
+}
+
+@keyframes shimmer {
+    to {
+        background-position: 200% center;
+    }
+}
+
+.bottomLeft {
+    position: absolute;
+    bottom: 30px;
+    left: 40px;
+    display: flex;
+    gap: 20px;
+    z-index: 10;
+}
+
+.footerLink {
+    color: rgba(255, 255, 255, 0.5);
+    text-decoration: none;
+    font-size: 0.9em;
+    transition: color 0.3s;
+    cursor: pointer;
+}
+
+.footerLink:hover {
+    color: #fff;
+}
+
+.bottomRight {
+    position: absolute;
+    bottom: 30px;
+    right: 40px;
+    z-index: 10;
+}
+
+.topRight {
+    position: absolute;
+    top: 30px;
+    right: 40px;
+    z-index: 10;
+}
+
+.glassBtn {
+    padding: 10px 24px;
+    font-size: 1rem;
+    font-weight: 500;
+    color: white;
+    background: white/10;
+    border: 1px solid white/20;
+    border-radius: 9999px;
+    backdrop-filter: blur(4px);
+    transition: all 0.3s;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+}
+
+.glassBtn:hover {
+    background: white/20;
+    transform: scale(1.05);
+    box-shadow: 0 0 20px rgba(255, 0, 150, 0.4);
 }
