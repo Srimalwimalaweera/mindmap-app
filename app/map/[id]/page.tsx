@@ -14,6 +14,7 @@ import { useUndoRedo } from '@/app/hooks/useUndoRedo';
 import MindMapEditor from '@/app/components/MindMapLoader';
 
 // const MindMapEditor = dynamic(() => import('@/app/components/MindMapEditor'), { ssr: false });
+export const runtime = 'edge';
 
 export default function MapEditorPage({ params }: { params: Promise<{ id: string }> }) {
     // Unwrap params using React.use()
