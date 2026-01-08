@@ -1,5 +1,5 @@
 import { db } from "@/lib/firebase";
-import { collection, doc, getDoc, setDoc, getDocs, query, where, addDoc, updateDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where, addDoc, updateDoc } from "firebase/firestore";
 
 export interface MindMapData {
     id: string;

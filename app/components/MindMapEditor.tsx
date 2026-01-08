@@ -11,6 +11,10 @@ const GHOST_SYMBOL = '@[[ADD_NEW]]';
 interface EditorProps {
     markdown: string;
     onMarkdownChange: (newMarkdown: string) => void;
+    onUndo?: () => void;
+    onRedo?: () => void;
+    canUndo?: boolean;
+    canRedo?: boolean;
 }
 
 interface EditingState {
@@ -23,25 +27,56 @@ interface EditingState {
     payload?: any;
     depth: number;
     mode?: 'menu' | 'input';
+    template?: 'text' | 'link' | 'image' | 'code' | 'task';
 }
 
 type ViewMode = 'visual' | 'note';
 
-export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProps) {
+export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRedo, canUndo = false, canRedo = false }: EditorProps) {
     const svgRef = useRef<SVGSVGElement>(null);
     const mmRef = useRef<Markmap | null>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     const [editing, setEditing] = useState<EditingState | null>(null);
-    // Ref to track editing state inside stale closures (D3 event listeners)
     const editingRef = useRef<EditingState | null>(null);
+
+    // New States for Advanced Interaction
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string; payload: any } | null>(null);
+    // Track expanded lines (Visual only, resets on reload)
+    const [expandedLines, setExpandedLines] = useState<Set<number>>(new Set());
+
+    // Refs for Gestures
+    const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
 
     const [viewMode, setViewMode] = useState<ViewMode>('visual');
     const [isFullscreen, setIsFullscreen] = useState(false);
 
-    // Keep ref synced
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            // Check for Ctrl+Z / Cmd+Z
+            if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+                if (e.shiftKey) {
+                    // Redo (Ctrl+Shift+Z)
+                    e.preventDefault();
+                    onRedo?.();
+                } else {
+                    // Undo (Ctrl+Z)
+                    e.preventDefault();
+                    onUndo?.();
+                }
+            }
+            // Check for Ctrl+Y / Cmd+Y (Redo alternate)
+            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+                e.preventDefault();
+                onRedo?.();
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [onUndo, onRedo]);
+
     useEffect(() => {
         editingRef.current = editing;
     }, [editing]);
@@ -51,24 +86,46 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
     // Initial Load & Markdown Updates
     useEffect(() => {
         let mounted = true;
-        let observer: MutationObserver | null = null;
-        // eslint-disable-next-line no-undef
         let initialTimer: NodeJS.Timeout | null = null;
+        let resizeObserver: ResizeObserver | null = null;
+
+        // Capture ref value for cleanup
+        const svgElement = svgRef.current;
 
         if (viewMode === 'visual') {
-            if (svgRef.current) {
+            if (svgElement) {
                 // Clear existing
-                svgRef.current.innerHTML = '';
+                svgElement.innerHTML = '';
                 // Remove any residual listeners to be safe
-                d3.select(svgRef.current).on('click', null).on('.zoom', null);
+                d3.select(svgElement).on('click', null).on('.zoom', null);
             }
 
             requestAnimationFrame(() => {
-                if (!mounted || !svgRef.current) return;
+                if (!mounted || !svgElement || !wrapperRef.current) return;
+
+                // FIX: D3 Zoom fails with relative sizes (NotSupportedError).
+                // We must use explicit pixel dimensions and update them on resize.
+                const updateDimensions = () => {
+                    if (wrapperRef.current && svgElement) {
+                        const { width, height } = wrapperRef.current.getBoundingClientRect();
+                        svgElement.setAttribute('width', width.toString());
+                        svgElement.setAttribute('height', height.toString());
+                        mmRef.current?.fit();
+                    }
+                };
+
+                // Initial sizing
+                updateDimensions();
+
+                // Observe for resizing
+                resizeObserver = new ResizeObserver(() => {
+                    updateDimensions();
+                });
+                resizeObserver.observe(wrapperRef.current);
 
                 try {
                     // 1. Create Instance
-                    mmRef.current = Markmap.create(svgRef.current, {
+                    mmRef.current = Markmap.create(svgElement, {
                         autoFit: true,
                         zoom: true,
                         pan: true,
@@ -78,15 +135,46 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                     if (markdown) {
                         const { root } = transformer.transform(markdown);
 
-                        // DATA-LEVEL FIX: Mutate the data tree BEFORE rendering
-                        // This ensures Markmap renders our custom HTML instead of the raw symbol
+                        // DATA-LEVEL FIX and FEATURE ENHANCEMENT
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const processNode = (node: any) => {
+                            // 1. Ghost Node Logic
                             if (node.content && (node.content.includes(GHOST_SYMBOL) || node.content.includes('[[ADD_NEW]]'))) {
-                                // Inject HTML directly into the node data
                                 node.content = '<span class="ghost-node-placeholder" style="color: #9ca3af; font-style: italic; cursor: pointer;">+ Click to add</span>';
-                                // Tag it for easier identification later if needed
                                 node.isGhost = true;
+                            } else if (node.content) {
+                                // 2. Link Handling (Open in new window) & Media Thumbnails
+                                // Inject target="_blank" into existing <a> tags
+                                node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
+
+                                // Check for Media URLs in the content to add thumbnails
+                                const mediaMatch = node.content.match(/\.(jpeg|jpg|gif|png|mp4|webm|webp)/i);
+                                if (mediaMatch) {
+                                    // Append a small icon
+                                    const icon = mediaMatch[0].match(/mp4|webm/i) ? '🎥' : '🖼️';
+                                    node.content += ` <span style="font-size: 0.8em; margin-left: 4px;" title="Media Content">${icon}</span>`;
+                                }
+
+                                // 3. Truncation Logic (> 47 chars)
+                                const strippedText = node.content.replace(/<[^>]+>/g, '');
+                                if (strippedText.length > 47) {
+                                    if (!node.payload) node.payload = {};
+
+                                    // Check if expanded in React state
+                                    const lineIndex = node.payload?.lines?.[0];
+                                    const isExpanded = lineIndex !== undefined && expandedLines.has(lineIndex);
+
+                                    if (!isExpanded) {
+                                        // Plain text truncation for safety
+                                        if (!node.content.includes('<')) {
+                                            node.payload.fullContent = node.content;
+                                            node.content = node.content.substring(0, 47) + '...';
+                                            node.payload.isTruncated = true;
+                                        }
+                                    }
+                                }
                             }
+
                             if (node.children) {
                                 node.children.forEach(processNode);
                             }
@@ -99,38 +187,30 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
                     // 3. Global Event Delegation (Robust Interaction)
                     // Instead of attaching listeners to transient nodes, we listen on the static SVG
-                    const svg = d3.select(svgRef.current);
+                    const svg = d3.select(svgElement);
 
                     // Remove any existing click handlers to prevent duplicates
                     svg.on('click', null); // Clear prev
+                    svg.on('contextmenu', null);
 
                     svg.on('click', function (event) {
                         const target = event.target as Element;
 
                         // A. Check for Ghost Node Click
-                        // We check if the target is our custom placeholder OR inside it
                         const ghostPlaceholder = target.closest('.ghost-node-placeholder');
                         if (ghostPlaceholder) {
                             event.preventDefault();
                             event.stopPropagation();
-
-                            // Find parent group to get data
                             const nodeGroup = target.closest('g.markmap-node');
                             if (nodeGroup) {
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                 const d = d3.select(nodeGroup).datum() as any;
                                 const wrapper = wrapperRef.current;
-
-                                // FALLBACK: If d.data is missing, d itself might be the data (or d.data was stripped)
                                 const dataNode = d?.data || d;
-
                                 if (wrapper && dataNode) {
-
                                     const wrapperRect = wrapper.getBoundingClientRect();
                                     const rect = nodeGroup.getBoundingClientRect();
-
-                                    // Robust ID extraction
                                     const nodeId = dataNode.state?.id || dataNode.id || 'unknown';
-
                                     setEditing({
                                         id: nodeId,
                                         x: rect.left - wrapperRect.left + (rect.width / 2),
@@ -151,56 +231,109 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                         if (textEl) {
                             const nodeGroup = target.closest('g.markmap-node');
                             if (nodeGroup) {
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                 const d = d3.select(nodeGroup).datum() as any;
-
-                                // Fallback for data access
                                 const dataNode = d?.data || d;
-
-                                // Ignore if it's actually a ghost node
-                                const content = dataNode?.content || '';
-                                if (content.includes('ghost-node-placeholder')) return; // Ignore ghost click overlap
+                                if (dataNode?.content?.includes('ghost-node-placeholder')) return;
 
                                 if (wrapperRef.current && dataNode) {
                                     event.preventDefault();
                                     event.stopPropagation();
 
-                                    const wrapper = wrapperRef.current;
-                                    const wrapperRect = wrapper.getBoundingClientRect();
-                                    const rect = textEl.getBoundingClientRect();
+                                    // --- GESTURE LOGIC ---
+                                    if (clickTimerRef.current) {
+                                        // DOUBLE CLICK detected -> EDIT
+                                        clearTimeout(clickTimerRef.current);
+                                        clickTimerRef.current = null;
 
-                                    const nodeId = dataNode.state?.id || dataNode.id || 'unknown';
+                                        const wrapper = wrapperRef.current;
+                                        const wrapperRect = wrapper.getBoundingClientRect();
+                                        const rect = textEl.getBoundingClientRect();
+                                        const nodeId = dataNode.state?.id || dataNode.id || 'unknown';
 
-                                    setEditing({
-                                        id: nodeId,
-                                        x: rect.left - wrapperRect.left,
-                                        y: rect.top - wrapperRect.top,
-                                        text: dataNode.content,
-                                        isGhost: false,
-                                        payload: dataNode.payload || {},
-                                        depth: d?.depth || dataNode.depth || 0,
-                                        mode: 'input'
-                                    });
+                                        // Edit FULL content (not truncated)
+                                        const fullText = dataNode.payload?.fullContent || dataNode.content.replace(/<[^>]+>/g, '');
+
+                                        setEditing({
+                                            id: nodeId,
+                                            x: rect.left - wrapperRect.left,
+                                            y: rect.top - wrapperRect.top,
+                                            text: fullText,
+                                            isGhost: false,
+                                            payload: dataNode.payload || {},
+                                            depth: d?.depth || dataNode.depth || 0,
+                                            mode: 'input'
+                                        });
+
+                                    } else {
+                                        // SINGLE CLICK detected -> EXPAND (Delayed)
+                                        clickTimerRef.current = setTimeout(() => {
+                                            clickTimerRef.current = null;
+
+                                            // Toggle Expansion logic
+                                            const lineIndex = dataNode.payload?.lines?.[0];
+                                            if (lineIndex !== undefined) {
+                                                setExpandedLines(prev => {
+                                                    const next = new Set(prev);
+                                                    if (next.has(lineIndex)) {
+                                                        next.delete(lineIndex);
+                                                    } else {
+                                                        next.add(lineIndex);
+                                                    }
+                                                    return next;
+                                                });
+                                            }
+                                        }, 250);
+                                    }
                                 }
                             }
-                            return; // Stop here if node clicked
+                            return;
                         }
 
-                        // C. Background Click (Close Menu)
-                        // Note: Input blur handling is separate (via onBlur event)
+                        // C. Background Click
                         if (editingRef.current?.mode === 'menu') {
                             setEditing(null);
                         }
+                        setContextMenu(null);
+                    });
+
+                    // D. Context Menu (Right Click)
+                    svg.on('contextmenu', function (event) {
+                        event.preventDefault(); // Disable browser menu
+                        const target = event.target as Element;
+
+                        // Check if node
+                        const textEl = target.closest('text, foreignObject');
+                        if (textEl && wrapperRef.current) {
+                            const nodeGroup = target.closest('g.markmap-node');
+                            if (nodeGroup) {
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                const d = d3.select(nodeGroup).datum() as any;
+                                const dataNode = d?.data || d;
+                                const nodeId = dataNode.state?.id || dataNode.id || 'unknown';
+
+                                const [bx, by] = d3.pointer(event, wrapperRef.current);
+                                setContextMenu({
+                                    x: bx,
+                                    y: by,
+                                    nodeId: nodeId,
+                                    payload: dataNode.payload || {}
+                                });
+                                return;
+                            }
+                        }
+                        // Close if background right click
+                        setContextMenu(null);
                     });
 
                     // (Optional) Visual Reinforcement
                     const updateStyles = () => {
-                        if (!svgRef.current) return;
-                        const s = d3.select(svgRef.current);
+                        if (!svgElement) return;
+                        const s = d3.select(svgElement);
                         s.selectAll('.ghost-node-placeholder').style('cursor', 'pointer');
                     };
 
                     // Clear any previous timer
-                    if (observer) observer.disconnect();
                     if (initialTimer) clearInterval(initialTimer);
                     initialTimer = setInterval(updateStyles, 500);
 
@@ -212,16 +345,16 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
         return () => {
             mounted = false;
-            if (observer) observer.disconnect();
-            if (initialTimer) clearInterval(initialTimer); // Changed to interval
+            if (resizeObserver) resizeObserver.disconnect();
+            if (initialTimer) clearInterval(initialTimer);
 
-            // Critical Fix for D3 Zoom Error:
-            // Explicitly remove zoom listeners and clear SVG *before* unmount complete
-            if (svgRef.current) {
-                const svg = d3.select(svgRef.current);
-                svg.on('click', null); // Remove global listener
-                svg.on('.zoom', null); // Unbind zoom
-                svgRef.current.innerHTML = ''; // Kill children
+            // Critical Fix for D3 Zoom Error
+            if (svgElement) {
+                const svg = d3.select(svgElement);
+                svg.on('click', null);
+                svg.on('.zoom', null);
+                svg.on('contextmenu', null);
+                svgElement.innerHTML = '';
             }
 
             if (mmRef.current) {
@@ -229,9 +362,8 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                 mmRef.current = null;
             }
         };
-    }, [viewMode]); // Re-run if viewMode changes (rendering new map)
-    // IMPORTANT: We do NOT depend on `markdown` here to avoid full re-init on every keystroke.
-    // The second useEffect handles data updates.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [viewMode, expandedLines]); // Re-run if viewMode or expandedLines changes
 
     // Sync Markdown
     useEffect(() => {
@@ -239,11 +371,40 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
             const { root } = transformer.transform(markdown);
 
             // Re-apply Data Transformation on updates
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const processNode = (node: any) => {
+                // 1. Ghost Node Logic
                 if (node.content && (node.content.includes(GHOST_SYMBOL) || node.content.includes('[[ADD_NEW]]'))) {
                     node.content = '<span class="ghost-node-placeholder" style="color: #9ca3af; font-style: italic; cursor: pointer;">+ Click to add</span>';
                     node.isGhost = true;
+                } else if (node.content) {
+                    // 2. Link Handling (Open in new window) & Media Thumbnails
+                    node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
+
+                    const mediaMatch = node.content.match(/\.(jpeg|jpg|gif|png|mp4|webm|webp)/i);
+                    if (mediaMatch) {
+                        const icon = mediaMatch[0].match(/mp4|webm/i) ? '🎥' : '🖼️';
+                        node.content += ` <span style="font-size: 0.8em; margin-left: 4px;" title="Media Content">${icon}</span>`;
+                    }
+
+                    // 3. Truncation Logic (> 47 chars)
+                    const strippedText = node.content.replace(/<[^>]+>/g, '');
+                    if (strippedText.length > 47) {
+                        if (!node.payload) node.payload = {};
+
+                        const lineIndex = node.payload?.lines?.[0];
+                        const isExpanded = lineIndex !== undefined && expandedLines.has(lineIndex);
+
+                        if (!isExpanded) {
+                            if (!node.content.includes('<')) {
+                                node.payload.fullContent = node.content;
+                                node.content = node.content.substring(0, 47) + '...';
+                                node.payload.isTruncated = true;
+                            }
+                        }
+                    }
                 }
+
                 if (node.children) {
                     node.children.forEach(processNode);
                 }
@@ -257,7 +418,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                 console.error("Update error:", e);
             }
         }
-    }, [markdown, viewMode]);
+    }, [markdown, viewMode, expandedLines]);
 
 
     const handleSave = (newText: string) => {
@@ -269,21 +430,83 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
             return;
         }
 
-        // If regular node AND empty -> Cancel (Don't delete, just revert edit mode)
-        // User asked: "User cannot delete this node" referring to Ghost node default.
-        // For regular nodes, empty input usually means "keep old" or "delete"?
-        // Current logic: Cancel edit. To delete, use button.
+        // If regular node OR NEW_CHILD AND empty -> Cancel
         if (!editing.isGhost && !newText.trim()) {
             setEditing(null);
             return;
         }
 
         const lines = markdown.split('\n');
-        const lineIndex = editing.payload?.lines?.[0];
+        // Determine target line index
+        // For NEW_CHILD, we use parentLineIndex from payload
+        // For others, we use payload.lines[0]
+        const rawLineIndex = editing.id === 'NEW_CHILD'
+            ? editing.payload?.parentLineIndex
+            : editing.payload?.lines?.[0];
 
-        if (lineIndex === undefined) return;
+        const lineIndex = Number(rawLineIndex);
+        console.log('[DEBUG] Line Index Type:', typeof lineIndex, lineIndex);
 
-        if (editing.isGhost) {
+        if (isNaN(lineIndex)) return;
+
+        // --- Template Wrappers ---
+        let finalContent = newText;
+        if (editing.template) {
+            switch (editing.template) {
+                case 'link':
+                    finalContent = `[${newText}](https://)`;
+                    break;
+                case 'image':
+                    finalContent = `![${newText}]()`;
+                    break;
+                case 'code':
+                    finalContent = `\`\`\`\n${newText}\n\`\`\``;
+                    break;
+                case 'task':
+                    finalContent = `- [ ] ${newText}`;
+                    break;
+                case 'text':
+                default:
+                    finalContent = newText;
+            }
+        }
+
+        if (editing.id === 'NEW_CHILD') {
+            const parentLineIndex = editing.payload?.parentLineIndex;
+            console.log('[DEBUG] NEW_CHILD:', {
+                parentLineIndex,
+                lineIndex,
+                editingPayload: editing.payload,
+                linesLength: lines.length
+            });
+
+            // Logic: Insert New Child
+            const parentLine = lines[lineIndex];
+            console.log('[DEBUG] Parent Line:', parentLine);
+
+            // Check if parent is a header
+            const headerMatch = parentLine.match(/^(#+)\s/);
+
+            let newLine = '';
+
+            if (headerMatch) {
+                // Parent is a header -> Child is a deeper header
+                const level = headerMatch[1].length;
+                newLine = `${'#'.repeat(level + 1)} ${finalContent}`;
+            } else {
+                // Parent is likely a list item
+                const match = parentLine.match(/^(\s*)/);
+                const parentIndent = match ? match[0] : '';
+                // Child indent = parent + 2 spaces
+                const childIndent = parentIndent + '  ';
+                newLine = `${childIndent}- ${finalContent}`;
+            }
+
+            // Insert AFTER parent (First child)
+            lines.splice(lineIndex + 1, 0, newLine);
+            console.log('[DEBUG] After Splice:', lines);
+
+        } else if (editing.isGhost) {
             // Logic: Convert Ghost -> Real
             const originalLine = lines[lineIndex];
             const match = originalLine.match(/^(\s*)([-*+]|#+)(\s+)/);
@@ -294,7 +517,8 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                 marker = match[2];
             }
 
-            lines[lineIndex] = `${indent}${marker} ${newText}`;
+            // Use the constructed content
+            lines[lineIndex] = `${indent}${marker} ${finalContent}`;
 
             // Append NEW Ghost Node Sibling
             const newGhostLine = `${indent}${marker} ${GHOST_SYMBOL}`;
@@ -312,18 +536,126 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
         setEditing(null);
     };
 
+    const [deleteConfirmation, setDeleteConfirmation] = useState<{ count: number; startLineIndex: number } | null>(null);
+
     const handleDelete = () => {
-        if (!editing) return;
-        // Extra safety: Ghost nodes cannot be deleted via this button
-        if (editing.isGhost) return;
+        // Handle deletion from either Edit Mode or Context Menu
+        const targetPayload = editing?.payload || contextMenu?.payload;
+        const isGhost = editing?.isGhost || false;
+
+        if (!targetPayload) return;
+        if (isGhost) return; // Cannot delete ghost
 
         const lines = markdown.split('\n');
-        const lineIndex = editing.payload?.lines?.[0];
-        if (lineIndex === undefined) return;
+        const rawStartLineIndex = targetPayload.lines?.[0];
+        if (rawStartLineIndex === undefined) return;
+        const startLineIndex = Number(rawStartLineIndex);
 
-        lines.splice(lineIndex, 1);
-        onMarkdownChange(lines.join('\n'));
+        // Determine how many lines to delete (Recursive Logic)
+        let endLineIndex = startLineIndex;
+        const startLine = lines[startLineIndex];
+
+        // Check indentation or header level
+        const headerMatch = startLine.match(/^(#+)\s/);
+        const listMatch = startLine.match(/^(\s*)([-*+]|\d+\.)/);
+
+        // Find the range of children
+        for (let i = startLineIndex + 1; i < lines.length; i++) {
+            const currentLine = lines[i];
+
+            // Stop if empty line (optional, depends on flavor, usually included in block)
+            // if (!currentLine.trim()) break; 
+
+            if (headerMatch) {
+                // If parent is Header -> Stop at next Header of SAME or HIGHER level (fewer #)
+                const currentHeader = currentLine.match(/^(#+)\s/);
+                if (currentHeader) {
+                    if (currentHeader[1].length <= headerMatch[1].length) {
+                        break;
+                    }
+                }
+                // Include non-headers (list items under header) and deeper headers
+                endLineIndex = i;
+            } else if (listMatch) {
+                // If parent is List -> Stop at next List Item of SAME or LOWER indentation
+                // OR any Header (headers break lists)
+                if (currentLine.match(/^(#+)\s/)) break;
+
+                const currentListMatch = currentLine.match(/^(\s*)([-*+]|\d+\.)/);
+                if (currentListMatch) {
+                    // Compare indentation lengths
+                    if (currentListMatch[1].length <= listMatch[1].length) {
+                        break;
+                    }
+                }
+                // Include lines that are content of the list item (no marker, indented text)
+                endLineIndex = i;
+            } else {
+                // Fallback for unknown line types - just delete one
+                break;
+            }
+        }
+
+        const countToDelete = endLineIndex - startLineIndex + 1;
+
+        if (countToDelete > 1) {
+            // Use Custom Modal instead of window.confirm
+            setDeleteConfirmation({ count: countToDelete, startLineIndex });
+            setContextMenu(null); // Close context menu
+            return;
+        }
+
+        // Single node deletion (immediate)
+        lines.splice(startLineIndex, countToDelete);
+        const newMarkdown = lines.join('\n');
+        onMarkdownChange(newMarkdown);
         setEditing(null);
+        setContextMenu(null);
+    };
+
+    const confirmDelete = () => {
+        if (!deleteConfirmation) return;
+
+        const lines = markdown.split('\n');
+        lines.splice(deleteConfirmation.startLineIndex, deleteConfirmation.count);
+        const newMarkdown = lines.join('\n');
+        onMarkdownChange(newMarkdown);
+
+        setDeleteConfirmation(null);
+        setEditing(null);
+    };
+
+    const cancelDelete = () => {
+        setDeleteConfirmation(null);
+    };
+
+    // Edit from Context Menu
+    const handleEditFromContext = () => {
+        if (!contextMenu) return;
+
+        const lineIndex = contextMenu.payload?.lines?.[0];
+        let currentText = "";
+
+        if (lineIndex !== undefined) {
+            const line = markdown.split('\n')[lineIndex];
+            // Simple extraction (robust enough for plain text)
+            // Remove list markers
+            currentText = line.replace(/^(\s*[-*+]|\s*\d+\.|#+)\s+/, '');
+            // Remove [ ] if task
+            currentText = currentText.replace(/^\[[ x]\]\s+/, '');
+        }
+
+        setEditing({
+            id: contextMenu.nodeId,
+            x: contextMenu.x,
+            y: contextMenu.y,
+            text: currentText,
+            isGhost: false,
+            payload: contextMenu.payload,
+            depth: 0,
+            mode: 'input'
+        });
+        setContextMenu(null);
     };
 
     // --- Toolbar Actions ---
@@ -343,11 +675,89 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
     return (
         <div ref={wrapperRef} className="w-full h-full relative overflow-hidden bg-white dark:bg-zinc-900 group select-none">
-
             {/* Visual Mode */}
             {viewMode === 'visual' && (
                 <div className="w-full h-full animate-in fade-in duration-300">
                     <svg ref={svgRef} className="w-full h-full opacity-0 highlight-none" style={{ opacity: 1 }} />
+
+                    {/* Custom Deletion Confirmation Modal */}
+                    {deleteConfirmation && (
+                        <div className="absolute inset-0 z-[10001] flex items-center justify-center bg-black/20 backdrop-blur-sm animate-in fade-in duration-200">
+                            <div className="bg-white dark:bg-zinc-800 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-700 p-6 max-w-sm w-full mx-4 transform transition-all scale-100 animate-in zoom-in-95 duration-200">
+                                <h3 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100 mb-2">
+                                    Confirm Deletion
+                                </h3>
+                                <p className="text-zinc-600 dark:text-zinc-400 mb-6">
+                                    Are you sure you want to delete this node and its <span className="font-medium text-zinc-900 dark:text-zinc-200">{deleteConfirmation.count - 1} children</span>?
+                                </p>
+                                <div className="flex justify-end gap-3">
+                                    <button
+                                        onClick={cancelDelete}
+                                        className="px-4 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={confirmDelete}
+                                        className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg shadow-sm transition-colors focus:ring-2 focus:ring-red-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-800"
+                                    >
+                                        Delete
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Context Menu */}
+                    {contextMenu && (
+                        <div
+                            style={{
+                                position: 'absolute',
+                                left: contextMenu.x,
+                                top: contextMenu.y,
+                                zIndex: 10000,
+                            }}
+                            className="bg-white dark:bg-zinc-800 rounded-lg shadow-xl border border-zinc-200 dark:border-zinc-700 py-1 min-w-[140px] animate-in fade-in zoom-in-95 duration-100 flex flex-col overflow-hidden"
+                        >
+                            <button
+                                onClick={() => {
+                                    if (!contextMenu) return;
+                                    setEditing({
+                                        id: 'NEW_CHILD',
+                                        x: contextMenu.x,
+                                        y: contextMenu.y,
+                                        text: '',
+                                        isGhost: false,
+                                        payload: {
+                                            parentLineIndex: contextMenu.payload?.lines?.[0],
+                                            parentDepth: contextMenu.payload?.depth || 0 // Not reliable in all parsers but useful if available
+                                        },
+                                        depth: 0,
+                                        mode: 'input'
+                                    });
+                                    setContextMenu(null);
+                                }}
+                                className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+                                Add Child Node
+                            </button>
+                            <button
+                                onClick={handleEditFromContext}
+                                className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                                Edit Node
+                            </button>
+                            <button
+                                onClick={handleDelete}
+                                className="w-full text-left px-4 py-2 text-sm hover:bg-red-50 dark:hover:bg-red-900/20 text-red-600 dark:text-red-400 flex items-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                                Delete
+                            </button>
+                        </div>
+                    )}
 
                     {editing && (
                         <div
@@ -363,7 +773,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                                 <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 p-1.5 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-700 animate-in fade-in zoom-in-95 duration-200">
                                     {/* Text Node */}
                                     <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '' })}
+                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'text' })}
                                         className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
                                         title="Text"
                                     >
@@ -373,7 +783,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
                                     {/* Link Node */}
                                     <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '[](https://)' })}
+                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'link' })}
                                         className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
                                         title="Link"
                                     >
@@ -386,7 +796,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
                                     {/* Image Node */}
                                     <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '![]()' })}
+                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'image' })}
                                         className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
                                         title="Image"
                                     >
@@ -400,7 +810,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
                                     {/* Code Node */}
                                     <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '```\n\n```' })}
+                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'code' })}
                                         className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
                                         title="Code"
                                     >
@@ -413,7 +823,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
 
                                     {/* List/Task Node */}
                                     <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '- [ ] ' })}
+                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'task' })}
                                         className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
                                         title="Task"
                                     >
@@ -441,7 +851,12 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                                         }}
                                         className="min-w-[200px] w-auto px-3 py-1 bg-transparent text-black dark:text-white outline-none text-sm font-medium"
                                         value={editing.text}
-                                        placeholder="Type content..."
+                                        placeholder={
+                                            editing.template === 'link' ? "Link Title..." :
+                                                editing.template === 'image' ? "Image Alt Text..." :
+                                                    editing.template === 'code' ? "Code Snippet..." :
+                                                        "Type content..."
+                                        }
                                         onChange={(e) => setEditing({ ...editing, text: e.target.value })}
                                         onKeyDown={(e) => {
                                             if (e.key === 'Enter') handleSave(editing.text);
@@ -450,7 +865,6 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
                                         }}
                                         onBlur={() => {
                                             // AUTO-SAVE or CANCEL logic
-                                            // handleSave includes logic: if empty, it cancels. if text, it saves.
                                             handleSave(editing.text);
                                         }}
                                     />
@@ -506,6 +920,30 @@ export default function MindMapEditor({ markdown, onMarkdownChange }: EditorProp
             <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-3 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm p-2 px-4 rounded-full shadow-2xl border border-zinc-200 dark:border-zinc-700 z-[50]">
                 {viewMode === 'visual' && (
                     <div className="flex items-center gap-1 pr-3 border-r border-zinc-200 dark:border-zinc-700">
+                        <div className="flex items-center gap-0.5 mr-2 pr-2 border-r border-zinc-200 dark:border-zinc-700/50">
+                            <button
+                                onClick={onUndo}
+                                disabled={!canUndo}
+                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                                title="Undo (Ctrl+Z)"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M3 7v6h6" />
+                                    <path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+                                </svg>
+                            </button>
+                            <button
+                                onClick={onRedo}
+                                disabled={!canRedo}
+                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                                title="Redo (Ctrl+Shift+Z)"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 7v6h-6" />
+                                    <path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" />
+                                </svg>
+                            </button>
+                        </div>
                         <button onClick={handleZoomOut} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors" title="Zoom Out">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <circle cx="11" cy="11" r="8" />
