@@ -16,6 +16,8 @@ import {
 } from './services/mindmapService';
 import Image from 'next/image';
 
+import LandingPage from './components/LandingPage';
+
 export default function Dashboard() {
   const [maps, setMaps] = useState<MindMapData[]>([]);
   const [user, setUser] = useState<User | null>(null);
@@ -223,6 +225,11 @@ export default function Dashboard() {
 
   if (loading) return <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-zinc-900 text-gray-500">Loading...</div>;
 
+  // Use the new LandingPage component when not logged in
+  if (!user) {
+    return <LandingPage onGetStarted={() => router.push('/login')} />;
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-zinc-900">
       {/* Header */}
@@ -308,99 +315,82 @@ export default function Dashboard() {
       </header>
 
       <main className="container mx-auto px-6 py-8">
-        {!user ? (
-          <div className="flex flex-col items-center justify-center py-20 text-center">
-            <h2 className="text-3xl font-bold text-gray-800 dark:text-white mb-4">Visualize Your Ideas</h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-8 max-w-md">
-              Create beautiful, interactive mind maps and digital books. Sign in to start organizing your thoughts.
-            </p>
-            <button
-              onClick={() => router.push('/login')}
-              className="px-8 py-3 text-lg font-medium text-white bg-blue-600 rounded-full hover:bg-blue-700 shadow-lg transition-transform hover:-translate-y-1"
+        <div className="flex items-center justify-between mb-8">
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Your Projects</h2>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          {/* Create New Project Card */}
+          <button
+            onClick={() => setIsNewProjectModalOpen(true)}
+            className="group flex flex-col items-center justify-center h-48 bg-white dark:bg-zinc-800 rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-600 hover:border-blue-500 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-zinc-700/50 transition-all cursor-pointer"
+          >
+            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+              </svg>
+            </div>
+            <span className="font-medium text-gray-600 group-hover:text-blue-600 dark:text-gray-300 dark:group-hover:text-blue-400">Create New Project</span>
+          </button>
+
+          {/* Project Cards */}
+          {activeMaps.map((map) => (
+            <div
+              key={map.id}
+              onClick={() => router.push(`/map/${map.id}`)}
+              className="group relative flex flex-col h-48 bg-white dark:bg-zinc-800 rounded-xl shadow-sm hover:shadow-md border border-gray-100 dark:border-zinc-700 overflow-hidden cursor-pointer transition-all hover:-translate-y-1"
             >
-              Get Started
-            </button>
-          </div>
-        ) : (
-          <>
-            <div className="flex items-center justify-between mb-8">
-              <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Your Projects</h2>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {/* Create New Project Card */}
-              <button
-                onClick={() => setIsNewProjectModalOpen(true)}
-                className="group flex flex-col items-center justify-center h-48 bg-white dark:bg-zinc-800 rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-600 hover:border-blue-500 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-zinc-700/50 transition-all cursor-pointer"
-              >
-                <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                  </svg>
-                </div>
-                <span className="font-medium text-gray-600 group-hover:text-blue-600 dark:text-gray-300 dark:group-hover:text-blue-400">Create New Project</span>
-              </button>
-
-              {/* Project Cards */}
-              {activeMaps.map((map) => (
-                <div
-                  key={map.id}
-                  onClick={() => router.push(`/map/${map.id}`)}
-                  className="group relative flex flex-col h-48 bg-white dark:bg-zinc-800 rounded-xl shadow-sm hover:shadow-md border border-gray-100 dark:border-zinc-700 overflow-hidden cursor-pointer transition-all hover:-translate-y-1"
+              {/* Pin & Trash Buttons */}
+              <div className="absolute top-2 right-2 flex gap-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={(e) => handlePin(e, map)}
+                  className={`p-1.5 rounded-full backdrop-blur-sm transition-colors ${map.isPinned ? 'bg-blue-100 text-blue-600' : 'bg-white/50 hover:bg-blue-50 hover:text-blue-600 text-gray-400'}`}
                 >
-                  {/* Pin & Trash Buttons */}
-                  <div className="absolute top-2 right-2 flex gap-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={(e) => handlePin(e, map)}
-                      className={`p-1.5 rounded-full backdrop-blur-sm transition-colors ${map.isPinned ? 'bg-blue-100 text-blue-600' : 'bg-white/50 hover:bg-blue-50 hover:text-blue-600 text-gray-400'}`}
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={map.isPinned ? "currentColor" : "none"} strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
-                      </svg>
-                    </button>
-                    <button
-                      onClick={(e) => handleSoftDelete(e, map)}
-                      className="p-1.5 rounded-full bg-white/50 hover:bg-red-50 hover:text-red-600 text-gray-400 backdrop-blur-sm transition-colors"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                      </svg>
-                    </button>
-                  </div>
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={map.isPinned ? "currentColor" : "none"} strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
+                  </svg>
+                </button>
+                <button
+                  onClick={(e) => handleSoftDelete(e, map)}
+                  className="p-1.5 rounded-full bg-white/50 hover:bg-red-50 hover:text-red-600 text-gray-400 backdrop-blur-sm transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                  </svg>
+                </button>
+              </div>
 
-                  {/* Pinned Indicator on card if pinned (always visible) */}
-                  {map.isPinned && (
-                    <div className="absolute top-2 left-2 z-10">
-                      <span className="text-blue-500">
-                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 drop-shadow-sm">
-                          <path fillRule="evenodd" d="M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z" clipRule="evenodd" />
-                        </svg>
-                      </span>
-                    </div>
-                  )}
-
-                  <div className="flex-1 p-6 bg-gradient-to-br from-gray-50 to-white dark:from-zinc-800 dark:to-zinc-700/50">
-                    <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${map.type === 'book' ? 'bg-amber-100 text-amber-600' : 'bg-purple-100 text-purple-600'}`}>
-                      {map.type === 'book' ? (
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
-                        </svg>
-                      ) : (
-                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-                        </svg>
-                      )}
-                    </div>
-                    <h3 className="font-semibold text-gray-800 dark:text-white truncate pr-4">{map.title}</h3>
-                    <p className="text-xs text-gray-500 mt-2">
-                      {map.type === 'book' ? 'Digital Book' : 'Mind Map'} • {new Date(map.updatedAt).toLocaleDateString()}
-                    </p>
-                  </div>
+              {/* Pinned Indicator on card if pinned (always visible) */}
+              {map.isPinned && (
+                <div className="absolute top-2 left-2 z-10">
+                  <span className="text-blue-500">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5 drop-shadow-sm">
+                      <path fillRule="evenodd" d="M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z" clipRule="evenodd" />
+                    </svg>
+                  </span>
                 </div>
-              ))}
+              )}
+
+              <div className="flex-1 p-6 bg-gradient-to-br from-gray-50 to-white dark:from-zinc-800 dark:to-zinc-700/50">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${map.type === 'book' ? 'bg-amber-100 text-amber-600' : 'bg-purple-100 text-purple-600'}`}>
+                  {map.type === 'book' ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
+                    </svg>
+                  )}
+                </div>
+                <h3 className="font-semibold text-gray-800 dark:text-white truncate pr-4">{map.title}</h3>
+                <p className="text-xs text-gray-500 mt-2">
+                  {map.type === 'book' ? 'Digital Book' : 'Mind Map'} • {new Date(map.updatedAt).toLocaleDateString()}
+                </p>
+              </div>
             </div>
-          </>
-        )}
+          ))}
+        </div>
       </main>
 
       {/* Project Type Selection Modal */}
@@ -576,8 +566,8 @@ export default function Dashboard() {
               <button
                 onClick={handleConfirmAction}
                 className={`px-6 py-2 text-white font-medium rounded-lg shadow-lg transition-all ${confirmation.isDangerous
-                    ? 'bg-red-600 hover:bg-red-700 shadow-red-500/30'
-                    : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'
+                  ? 'bg-red-600 hover:bg-red-700 shadow-red-500/30'
+                  : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'
                   }`}
               >
                 {confirmation.actionLabel}

@@ -1,0 +1,101 @@
+.landingContainer {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #1e1e2e 0%, #2d1b3d 100%);
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    width: 100%;
+}
+
+.logoContainer {
+    text-align: center;
+}
+
+.logoWrapper {
+    background: rgba(255, 255, 255, 0.05);
+    padding: 60px;
+    border-radius: 30px;
+    backdrop-filter: blur(10px);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+    animation: float 6s ease-in-out infinite;
+    display: inline-block;
+}
+
+.logoWrapper svg {
+    filter: drop-shadow(0 10px 30px rgba(255, 0, 150, 0.4));
+}
+
+/* Animated lines */
+.euroLine {
+    animation: lineGlow 3s ease-in-out infinite;
+}
+
+.line1 {
+    animation-delay: 0s;
+}
+
+.line2 {
+    animation-delay: 0.3s;
+}
+
+/* Euro curve animation */
+.euroCurve {
+    animation: curveGlow 4s ease-in-out infinite;
+}
+
+@keyframes lineGlow {
+
+    0%,
+    100% {
+        opacity: 0.9;
+        filter: drop-shadow(0 0 8px rgba(255, 0, 150, 0.6));
+    }
+
+    50% {
+        opacity: 1;
+        filter: drop-shadow(0 0 20px rgba(255, 0, 150, 1));
+    }
+}
+
+@keyframes curveGlow {
+
+    0%,
+    100% {
+        filter: drop-shadow(0 0 10px rgba(200, 0, 255, 0.5));
+    }
+
+    50% {
+        filter: drop-shadow(0 0 25px rgba(200, 0, 255, 0.9));
+    }
+}
+
+@keyframes float {
+
+    0%,
+    100% {
+        transform: translateY(0px);
+    }
+
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+.title {
+    color: #fff;
+    margin-top: 30px;
+    font-size: 2em;
+    background: linear-gradient(135deg, #ff0080, #ff8c00, #c000ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: bold;
+}
+
+.subtitle {
+    color: rgba(255, 255, 255, 0.6);
+    margin-top: 10px;
+    font-size: 1.1em;
+    letter-spacing: 2px;
+}
