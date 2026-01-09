@@ -74,14 +74,7 @@ export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, sc
     };
 
     return (
-        <div className="flex items-center gap-3">
-            {/* Countdown Display - Positioned to the Left */}
-            {timeLeft && (
-                <div className="px-2 py-1 text-xs font-mono font-medium text-zinc-600 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-700/50 rounded-md border border-zinc-200 dark:border-zinc-700 shadow-sm animate-in fade-in duration-200 select-none tabular-nums">
-                    auto save: {timeLeft}
-                </div>
-            )}
-
+        <div className="flex flex-col items-center gap-1">
             <div className="relative flex items-center shadow-lg shadow-black/10 rounded-full" ref={dropdownRef}>
                 {/* Main Save Button */}
                 <button
@@ -126,6 +119,13 @@ export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, sc
                     </div>
                 )}
             </div>
+
+            {/* Countdown Display - Positioned Below */}
+            {timeLeft && (
+                <div className="text-[10px] font-mono text-white/80 select-none tabular-nums">
+                    auto save: {timeLeft}
+                </div>
+            )}
         </div>
     );
 }
