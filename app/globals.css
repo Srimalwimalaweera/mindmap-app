@@ -24,3 +24,12 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+.markmap-svg text,
+.markmap-svg foreignObject,
+.markmap-svg foreignObject div,
+.markmap-svg foreignObject span,
+.markmap-svg foreignObject p {
+  fill: #ffffff !important;
+  color: #ffffff !important;
+}

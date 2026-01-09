@@ -674,11 +674,11 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     };
 
     return (
-        <div ref={wrapperRef} className="w-full h-full relative overflow-hidden bg-transparent group select-none">
+        <div ref={wrapperRef} className="w-full h-full relative overflow-hidden bg-transparent group select-none text-white">
             {/* Visual Mode */}
             {viewMode === 'visual' && (
                 <div className="w-full h-full animate-in fade-in duration-300">
-                    <svg ref={svgRef} className="w-full h-full opacity-0 highlight-none" style={{ opacity: 1 }} />
+                    <svg ref={svgRef} className="w-full h-full opacity-0 highlight-none markmap-svg text-white" style={{ opacity: 1, color: 'white' }} />
 
                     {/* Custom Deletion Confirmation Modal */}
                     {deleteConfirmation && (
