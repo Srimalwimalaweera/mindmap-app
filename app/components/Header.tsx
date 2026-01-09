@@ -26,7 +26,7 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
     const router = useRouter();
 
     return (
-        <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-white/80 dark:bg-zinc-800/80 backdrop-blur-md shadow-sm border-b dark:border-zinc-700">
+        <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-white/5 backdrop-blur-md shadow-sm border-b border-white/10">
             <div className="flex items-center gap-2">
                 <Link href="/" className="flex items-center gap-2" title="Go to Dashboard">
                     <div className="w-8 h-8 bg-gradient-to-tr from-blue-500 to-purple-600 rounded-lg shadow-md flex items-center justify-center text-white font-bold text-xs">VM</div>
@@ -53,14 +53,14 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
                                     <input
                                         type="text"
                                         placeholder="Search projects..."
-                                        className="w-full pl-3 pr-8 py-1.5 text-sm bg-gray-100 dark:bg-zinc-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800 dark:text-white"
+                                        className="w-full pl-3 pr-8 py-1.5 text-sm bg-white/5 border border-white/10 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-white placeholder-gray-400"
                                         value={search.term}
                                         onChange={(e) => search.setTerm(e.target.value)}
                                     />
                                 </div>
                                 <button
                                     onClick={() => search.setIsOpen(!search.isOpen)}
-                                    className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded-full transition-colors"
+                                    className="p-2 text-gray-300 hover:bg-white/10 hover:text-white rounded-full transition-colors"
                                 >
                                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
                                         <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
@@ -73,7 +73,7 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
                         {trash && (
                             <button
                                 onClick={() => trash.setIsOpen(true)}
-                                className="p-2 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-zinc-700 rounded-full transition-colors relative"
+                                className="p-2 text-gray-300 hover:bg-white/10 hover:text-white rounded-full transition-colors relative"
                                 title="Trash Bin"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
@@ -90,7 +90,7 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
                 {/* User Profile */}
                 {user ? (
                     <>
-                        <div className="flex items-center gap-3 pl-4 border-l dark:border-zinc-700 ml-2">
+                        <div className="flex items-center gap-3 pl-4 border-l border-white/10 ml-2">
                             {user.photoURL ? (
                                 <Image
                                     src={user.photoURL}
@@ -106,7 +106,7 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
                             )}
                         </div>
                         {onLogout && (
-                            <button onClick={onLogout} className="p-2 text-gray-600 hover:text-red-500 transition-colors" title="Logout">
+                            <button onClick={onLogout} className="p-2 text-gray-300 hover:text-red-500 transition-colors" title="Logout">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
                                     <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
                                 </svg>
