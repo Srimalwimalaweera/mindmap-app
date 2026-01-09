@@ -741,7 +741,25 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
         await prepareDownload();
         if (!svgRef.current) return;
 
-        const svgData = new XMLSerializer().serializeToString(svgRef.current);
+        let svgData = new XMLSerializer().serializeToString(svgRef.current);
+
+        // Inject styles for Dark Theme (App Theme)
+        // Background: #1e1e2e (Dark Purple/Blue)
+        // Text: White
+
+        const styleBlock = '<style>text { fill: white !important; } .markmap-node > path { fill: none; stroke: white !important; }</style>';
+
+        // Prepend a background rectangle
+        // We need to get the width/height to make the rect cover the whole area
+        // If not explicit, we use 100%
+        const bgRect = '<rect width="100%" height="100%" fill="#1e1e2e"></rect>';
+
+        // Insert styleblock
+        svgData = svgData.replace(/>/, `>${styleBlock}`);
+        // Insert background rect immediately after (so it's behind everything)
+        // Note: SVG order matters, first child is back-most.
+        svgData = svgData.replace(/>/, `>${bgRect}`);
+
         const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -765,10 +783,16 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     <title>Mind Map Export</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { margin: 0; padding: 0; overflow: hidden; background-color: #1e1e2e; color: #fff; font-family: sans-serif; }
+        /* White Background, Black Text */
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #ffffff; color: #000; font-family: sans-serif; }
         #app { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
         #svg-container { flex: 1; width: 100%; height: 100%; position: relative; }
         svg { width: 100%; height: 100%; }
+        
+        /* Enforce Black Text for HTML Viewer (White Mode) */
+        .markmap-node text { fill: black !important; }
+        /* Ensure paths/lines are visible against white */
+        .markmap-node > path { stroke: #555 !important; }
         
         .controls {
             position: fixed;
@@ -776,17 +800,18 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
             right: 20px;
             display: flex;
             gap: 10px;
-            background: rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.1);
             backdrop-filter: blur(10px);
             padding: 8px;
             border-radius: 50px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         
         button {
             background: transparent;
             border: none;
-            color: #ddd;
+            color: #333;
             cursor: pointer;
             padding: 8px;
             border-radius: 50%;
@@ -797,8 +822,8 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
         }
         
         button:hover {
-            background: rgba(255, 255, 255, 0.2);
-            color: #fff;
+            background: rgba(0, 0, 0, 0.1);
+            color: #000;
         }
 
         .hidden { display: none !important; }
