@@ -421,6 +421,36 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     }, [markdown, viewMode, expandedLines]);
 
 
+
+    // Helper to find the full range of a node including its children
+    const findNodeRange = (lines: string[], startLineIndex: number): { endLineIndex: number } => {
+        const startLine = lines[startLineIndex];
+        const headerMatch = startLine.match(/^(#+)\s/);
+        const listMatch = startLine.match(/^(\s*)([-*+]|\d+\.)/);
+        let endLineIndex = startLineIndex;
+
+        for (let i = startLineIndex + 1; i < lines.length; i++) {
+            const currentLine = lines[i];
+            if (headerMatch) {
+                const currentHeader = currentLine.match(/^(#+)\s/);
+                if (currentHeader) {
+                    if (currentHeader[1].length <= headerMatch[1].length) break;
+                }
+                endLineIndex = i;
+            } else if (listMatch) {
+                if (currentLine.match(/^(#+)\s/)) break;
+                const currentListMatch = currentLine.match(/^(\s*)([-*+]|\d+\.)/);
+                if (currentListMatch) {
+                    if (currentListMatch[1].length <= listMatch[1].length) break;
+                }
+                endLineIndex = i;
+            } else {
+                break;
+            }
+        }
+        return { endLineIndex };
+    };
+
     const handleSave = (newText: string) => {
         if (!editing) return;
 
@@ -430,19 +460,21 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
             return;
         }
 
-        // If regular node OR NEW_CHILD AND empty -> Cancel
+        // If regular node OR NEW_CHILD OR INSERT_PARENT AND empty -> Cancel
         if (!editing.isGhost && !newText.trim()) {
             setEditing(null);
             return;
         }
 
         const lines = markdown.split('\n');
+
         // Determine target line index
-        // For NEW_CHILD, we use parentLineIndex from payload
-        // For others, we use payload.lines[0]
-        const rawLineIndex = editing.id === 'NEW_CHILD'
-            ? editing.payload?.parentLineIndex
-            : editing.payload?.lines?.[0];
+        let rawLineIndex = editing.payload?.lines?.[0];
+        if (editing.id === 'NEW_CHILD') {
+            rawLineIndex = editing.payload?.parentLineIndex;
+        } else if (editing.id === 'INSERT_PARENT') {
+            rawLineIndex = editing.payload?.childLineIndex;
+        }
 
         const lineIndex = Number(rawLineIndex);
         console.log('[DEBUG] Line Index Type:', typeof lineIndex, lineIndex);
@@ -471,7 +503,61 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
             }
         }
 
-        if (editing.id === 'NEW_CHILD') {
+        if (editing.id === 'INSERT_PARENT') {
+            // Logic: Insert New Parent Above Selected Node
+            const childLineIndex = lineIndex;
+            const childLine = lines[childLineIndex];
+
+            // 1. Identify Child Indentation/Level
+            const headerMatch = childLine.match(/^(#+)\s/);
+            const listMatch = childLine.match(/^(\s*)([-*+]|\d+\.)/);
+
+            let newParentLine = '';
+            let indentIncrement = '';
+
+            if (headerMatch) {
+                // Child is Header -> Parent takes current level, Child deepens
+                newParentLine = `${headerMatch[1]} ${finalContent}`;
+                indentIncrement = '#';
+            } else if (listMatch) {
+                // Child is List -> Parent takes current indent, Child indents further
+                const indent = listMatch[1];
+                const marker = listMatch[2]; // e.g. '-', '1.'
+                newParentLine = `${indent}${marker} ${finalContent}`;
+                indentIncrement = '  '; // Standard 2-space indent
+            } else {
+                // Fallback
+                newParentLine = `- ${finalContent}`;
+                indentIncrement = '  ';
+            }
+
+            // 2. Find Range of Child (and its descendants) to Indent
+            const { endLineIndex } = findNodeRange(lines, childLineIndex);
+
+            // 3. Indent the Child Block
+            for (let i = childLineIndex; i <= endLineIndex; i++) {
+                const current = lines[i];
+                if (headerMatch) {
+                    // Determine if this line is a header that needs indentation
+                    // We only indent headers that are "part" of this block. 
+                    // Since findNodeRange stops at equal/higher level, everything in range is deeper or same.
+                    // ACTUALLY: For markdown headers, deeper means MORE #.
+                    if (current.trim().startsWith('#')) {
+                        lines[i] = '#' + current;
+                    }
+                } else {
+                    // For lists, prepend spaces to everything (preserve relative structure)
+                    // But we must be careful not to break multi-line content if any
+                    if (current.trim().length > 0) {
+                        lines[i] = indentIncrement + current;
+                    }
+                }
+            }
+
+            // 4. Insert Parent ABOVE child
+            lines.splice(childLineIndex, 0, newParentLine);
+
+        } else if (editing.id === 'NEW_CHILD') {
             const parentLineIndex = editing.payload?.parentLineIndex;
             console.log('[DEBUG] NEW_CHILD:', {
                 parentLineIndex,
@@ -551,51 +637,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
         if (rawStartLineIndex === undefined) return;
         const startLineIndex = Number(rawStartLineIndex);
 
-        // Determine how many lines to delete (Recursive Logic)
-        let endLineIndex = startLineIndex;
-        const startLine = lines[startLineIndex];
-
-        // Check indentation or header level
-        const headerMatch = startLine.match(/^(#+)\s/);
-        const listMatch = startLine.match(/^(\s*)([-*+]|\d+\.)/);
-
-        // Find the range of children
-        for (let i = startLineIndex + 1; i < lines.length; i++) {
-            const currentLine = lines[i];
-
-            // Stop if empty line (optional, depends on flavor, usually included in block)
-            // if (!currentLine.trim()) break; 
-
-            if (headerMatch) {
-                // If parent is Header -> Stop at next Header of SAME or HIGHER level (fewer #)
-                const currentHeader = currentLine.match(/^(#+)\s/);
-                if (currentHeader) {
-                    if (currentHeader[1].length <= headerMatch[1].length) {
-                        break;
-                    }
-                }
-                // Include non-headers (list items under header) and deeper headers
-                endLineIndex = i;
-            } else if (listMatch) {
-                // If parent is List -> Stop at next List Item of SAME or LOWER indentation
-                // OR any Header (headers break lists)
-                if (currentLine.match(/^(#+)\s/)) break;
-
-                const currentListMatch = currentLine.match(/^(\s*)([-*+]|\d+\.)/);
-                if (currentListMatch) {
-                    // Compare indentation lengths
-                    if (currentListMatch[1].length <= listMatch[1].length) {
-                        break;
-                    }
-                }
-                // Include lines that are content of the list item (no marker, indented text)
-                endLineIndex = i;
-            } else {
-                // Fallback for unknown line types - just delete one
-                break;
-            }
-        }
-
+        const { endLineIndex } = findNodeRange(lines, startLineIndex);
         const countToDelete = endLineIndex - startLineIndex + 1;
 
         if (countToDelete > 1) {
@@ -741,6 +783,29 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
                                 Add Child Node
+                            </button>
+                            <button
+                                onClick={() => {
+                                    if (!contextMenu) return;
+                                    setEditing({
+                                        id: 'INSERT_PARENT',
+                                        x: contextMenu.x,
+                                        y: contextMenu.y,
+                                        text: '',
+                                        isGhost: false,
+                                        payload: {
+                                            childLineIndex: contextMenu.payload?.lines?.[0],
+                                            // We need to capture the indentation/level of the child to replicate it for the parent
+                                        },
+                                        depth: 0,
+                                        mode: 'input'
+                                    });
+                                    setContextMenu(null);
+                                }}
+                                className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+                                Add Main Node
                             </button>
                             <button
                                 onClick={handleEditFromContext}
