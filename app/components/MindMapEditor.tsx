@@ -899,6 +899,22 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     };
 
 
+    // Keyboard Shortcuts (Ctrl+S)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.code === 'KeyS')) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (onSave) {
+                    onSave();
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown, { capture: true });
+        return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
+    }, [onSave]);
+
     const toggleFullscreen = () => {
         if (!document.fullscreenElement) {
             wrapperRef.current?.requestFullscreen();

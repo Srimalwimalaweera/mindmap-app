@@ -27,6 +27,7 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
     const [saving, setSaving] = useState(false);
     const [lastSavedMarkdown, setLastSavedMarkdown] = useState('');
     const [autoSaveInterval, setAutoSaveInterval] = useState(30 * 60 * 1000); // Default 30 min
+    const [scheduledSaveTime, setScheduledSaveTime] = useState<number | null>(null);
     const router = useRouter();
 
     useEffect(() => {
@@ -57,23 +58,38 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
             console.error("Error saving mind map:", error);
             alert('Failed to save.');
         } finally {
+
             setSaving(false);
+            setScheduledSaveTime(null);
         }
     };
 
-    // Auto-Save Logic
+    // Auto-Save Logic (Debounce Style with Countdown)
     useEffect(() => {
         if (!user || autoSaveInterval <= 0) return;
 
-        const timer = setInterval(() => {
-            if (markdown !== lastSavedMarkdown && !saving) {
-                console.log("Auto-saving...");
-                handleSave();
-            }
+        // If content is same as last saved, clear any pending save
+        if (markdown === lastSavedMarkdown) {
+            setScheduledSaveTime(null);
+            return;
+        }
+
+        // If we are already saving, do nothing new
+        if (saving) return;
+
+        // Calculate next save time
+        const nextTime = Date.now() + autoSaveInterval;
+        setScheduledSaveTime(nextTime);
+
+        console.log(`[AutoSave] Scheduled in ${(autoSaveInterval / 1000)}s`);
+
+        const timer = setTimeout(() => {
+            console.log("[AutoSave] Executing...");
+            handleSave();
         }, autoSaveInterval);
 
-        return () => clearInterval(timer);
-    }, [user, autoSaveInterval, markdown, lastSavedMarkdown, saving]); // logic depends on current markdown vs lastSaved
+        return () => clearTimeout(timer);
+    }, [user, autoSaveInterval, markdown, lastSavedMarkdown]); // Note: removed 'saving' dependency to avoid loops, saving status is checked inside
 
     const handleBack = () => {
         router.push('/');
@@ -91,6 +107,7 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
                         onSave={handleSave}
                         isSaving={saving}
                         onIntervalChange={setAutoSaveInterval}
+                        scheduledSaveTime={scheduledSaveTime}
                     />
                 }
             />
