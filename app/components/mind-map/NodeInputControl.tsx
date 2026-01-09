@@ -17,6 +17,13 @@ interface NodeInputControlProps {
 
 type InputMode = 'text' | 'link' | 'list' | 'table' | 'media' | 'code';
 
+
+interface TaskItem {
+    id: string;
+    text: string;
+    checked: boolean;
+}
+
 export default function NodeInputControl({ initialValue, onSubmit, onCancel }: NodeInputControlProps) {
     // Parsing initial value for Task/List Mode
     // We support "Block List Mode" where multiple lines can be detected as a list.
@@ -47,13 +54,17 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
 
     // Regex
     const taskRegex = /^-\s\[( |x)\]\s/;
+    const htmlTaskRegex = /<ul class="checklist">/;
     const listRegex = /^(-\s|\d+\.\s)/;
 
     // Detect mode based on first line
     const taskMatch = firstLine.match(taskRegex);
+    const htmlTaskMatch = initialValue.match(htmlTaskRegex);
     const listMatch = firstLine.match(listRegex);
 
-    let initialIsTask = !!taskMatch;
+    // Check HTML Task first
+    let initialIsTask = !!taskMatch || !!htmlTaskMatch; // Logic update: accept HTML or Markdown as valid initial Task
+
     // Only detect markdown list if NOT html list (or if html parsing failed but looked like markdown)
     const initialIsList = isHtmlList || (!!listMatch && !initialIsTask);
     const initialListType = isHtmlList ? htmlListType : (listMatch ? (listMatch[1].startsWith('1') ? 'ordered' : 'bullet') : 'bullet');
@@ -65,9 +76,45 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
         cleanText = cleanText.replace(taskRegex, '');
     }
 
+    // Generate initial task items if it was a task list
+    const initialTaskItems: TaskItem[] = (() => {
+        if (!initialIsTask) return [];
+
+        // Priority: HTML Parser
+        if (initialValue.includes('<ul class="checklist">')) {
+            const matches = [...initialValue.matchAll(/<li><input type="checkbox" (checked )?disabled \/> (.*?)<\/li>/g)];
+            if (matches.length > 0) {
+                return matches.map((m, i) => ({
+                    id: `item-${Date.now()}-${i}`,
+                    checked: !!m[1], // "checked " exists
+                    text: m[2]
+                }));
+            }
+        }
+
+        return initialValue.split('\n').map((line, i) => {
+            const match = line.match(/^-\s\[( |x)\]\s(.*)/);
+            if (match) {
+                return {
+                    id: `item-${Date.now()}-${i}`,
+                    checked: match[1] === 'x',
+                    text: match[2]
+                };
+            }
+            return {
+                id: `item-${Date.now()}-${i}`,
+                checked: false,
+                text: line
+            };
+        });
+    })();
+
     const [value, setValue] = useState(cleanText);
     const [isTask, setIsTask] = useState(initialIsTask);
-    const [isChecked, setIsChecked] = useState(initialChecked);
+
+    // Checklist State
+    const [taskItems, setTaskItems] = useState<TaskItem[]>(initialTaskItems);
+    const itemRefs = useRef(new Map<string, HTMLInputElement>());
 
     // List State
     const [isList, setIsList] = useState(initialIsList);
@@ -81,10 +128,12 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
         const lines = val.split('\n').filter(l => l.trim() !== '');
 
         if (isTask) {
-            // Checkbox Mode: Prepend markdown tag to (clean) text value
-            // User sees "My Task", we save "- [ ] My Task"
-            const checkBoxPrefix = isChecked ? '- [x] ' : '- [ ] ';
-            return checkBoxPrefix + val;
+            // Checkbox Mode: Convert structured items to HTML Block
+            if (taskItems.length === 0) return val;
+            const listItems = taskItems.map(item =>
+                `<li><input type="checkbox" ${item.checked ? 'checked ' : ''}disabled /> ${item.text}</li>`
+            ).join('');
+            return `<ul class="checklist">${listItems}</ul>`;
         }
 
         if (isList) {
@@ -118,14 +167,26 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
         const newIsTask = !isTask;
         setIsTask(newIsTask);
 
-        // When turning on, default to unchecked.
         if (newIsTask) {
-            setIsChecked(false);
-        }
-
-        const textarea = textareaRef.current;
-        if (textarea) {
-            setTimeout(() => textarea.focus(), 0);
+            // Convert current text to task items
+            const currentText = textareaRef.current ? textareaRef.current.value : value;
+            const lines = currentText.split('\n');
+            const newItems = lines.map((line, i) => ({
+                id: `item-${Date.now()}-${i}`,
+                checked: false,
+                text: line
+            }));
+            setTaskItems(newItems);
+            // Focus first item
+            setTimeout(() => {
+                const firstId = newItems[0]?.id;
+                if (firstId) itemRefs.current.get(firstId)?.focus();
+            }, 0);
+        } else {
+            // Convert task items back to text (clean)
+            const text = taskItems.map(t => t.text).join('\n');
+            setValue(text);
+            setTimeout(() => textareaRef.current?.focus(), 0);
         }
     };
 
@@ -587,26 +648,104 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
             <div className="p-1 relative min-h-[100px] flex flex-col">
                 {mode === 'text' ? (
                     <div className="flex w-full h-full">
-                        {isTask && (
-                            <div className="pt-2 pl-2 pr-1">
-                                <input
-                                    type="checkbox"
-                                    checked={isChecked}
-                                    onChange={e => setIsChecked(e.target.checked)}
-                                    className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
-                                />
+                        {isTask ? (
+                            <div className="flex flex-col w-full h-full overflow-y-auto max-h-[300px]">
+                                {taskItems.map((item, index) => (
+                                    <div key={item.id} className="flex items-start gap-2 py-1 group">
+                                        <div className="pt-1 select-none cursor-pointer" onClick={() => {
+                                            const newItems = [...taskItems];
+                                            newItems[index].checked = !newItems[index].checked;
+                                            setTaskItems(newItems);
+                                        }}>
+                                            {item.checked ? (
+                                                <div className="w-4 h-4 bg-blue-500 rounded border border-blue-600 flex items-center justify-center text-white">
+                                                    <Check size={10} strokeWidth={4} />
+                                                </div>
+                                            ) : (
+                                                <div className="w-4 h-4 rounded border border-zinc-300 dark:border-zinc-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors" />
+                                            )}
+                                        </div>
+                                        <input
+                                            ref={el => {
+                                                if (el) itemRefs.current.set(item.id, el);
+                                                else itemRefs.current.delete(item.id);
+                                            }}
+                                            className="flex-1 bg-transparent outline-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed"
+                                            value={item.text}
+                                            placeholder="Task item..."
+                                            onChange={(e) => {
+                                                const newItems = [...taskItems];
+                                                newItems[index].text = e.target.value;
+                                                setTaskItems(newItems);
+                                            }}
+                                            onKeyDown={(e) => {
+                                                if (e.key === 'Enter') {
+                                                    e.preventDefault();
+                                                    // Add new item below
+                                                    const newItemId = `item-${Date.now()}`;
+                                                    const newItems = [...taskItems];
+                                                    newItems.splice(index + 1, 0, {
+                                                        id: newItemId,
+                                                        checked: false,
+                                                        text: ''
+                                                    });
+                                                    setTaskItems(newItems);
+                                                    setTimeout(() => itemRefs.current.get(newItemId)?.focus(), 0);
+                                                }
+                                                if (e.key === 'Backspace' && item.text === '') {
+                                                    // Delete if empty and not the only one?
+                                                    // If single empty item, maybe just do nothing or close?
+                                                    // Let's delete and focus previous
+                                                    if (taskItems.length > 1) {
+                                                        e.preventDefault();
+                                                        const newItems = taskItems.filter(i => i.id !== item.id);
+                                                        setTaskItems(newItems);
+                                                        const prevId = taskItems[index - 1]?.id;
+                                                        if (prevId) setTimeout(() => {
+                                                            const el = itemRefs.current.get(prevId);
+                                                            if (el) {
+                                                                el.focus();
+                                                                // Set cursor to end??
+                                                            }
+                                                        }, 0);
+                                                    }
+                                                }
+                                                if (e.key === 'ArrowUp') {
+                                                    e.preventDefault();
+                                                    const prevId = taskItems[index - 1]?.id;
+                                                    if (prevId) itemRefs.current.get(prevId)?.focus();
+                                                }
+                                                if (e.key === 'ArrowDown') {
+                                                    e.preventDefault();
+                                                    const nextId = taskItems[index + 1]?.id;
+                                                    if (nextId) itemRefs.current.get(nextId)?.focus();
+                                                }
+                                            }}
+                                        />
+                                    </div>
+                                ))}
+                                {taskItems.length === 0 && (
+                                    <div className="text-zinc-400 text-sm p-2 italic cursor-pointer" onClick={() => {
+                                        const newItem = { id: `item-${Date.now()}`, checked: false, text: '' };
+                                        setTaskItems([newItem]);
+                                        setTimeout(() => itemRefs.current.get(newItem.id)?.focus(), 0);
+                                    }}>
+                                        Click to add item...
+                                    </div>
+                                )}
                             </div>
+                        ) : (
+                            <textarea
+                                ref={textareaRef}
+                                className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed flex-1"
+                                placeholder={isList ? "List item..." : "Type something..."}
+                                value={value}
+                                onChange={e => setValue(e.target.value)}
+                                onKeyDown={handleKeyDown}
+                                onBlur={() => { /* Wait for explicit Done */ }}
+                                autoFocus
+                            />
                         )}
-                        <textarea
-                            ref={textareaRef}
-                            className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed flex-1"
-                            placeholder={isTask ? "Task description..." : (isList ? "List item..." : "Type something...")}
-                            value={value}
-                            onChange={e => setValue(e.target.value)}
-                            onKeyDown={handleKeyDown}
-                            onBlur={() => { /* Wait for explicit Done */ }}
-                            autoFocus
-                        />
                     </div>
                 ) : (
                     <div className="p-2">
