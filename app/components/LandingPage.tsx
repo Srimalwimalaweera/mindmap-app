@@ -86,7 +86,7 @@ export default function LandingPage({ onGetStarted }: LandingPageProps) {
                 z"/>
                     </svg>
                 </div>
-                <h1 className={styles.title}>MIND MAP</h1>
+                <h1 className={styles.title}>VISUAL MIND MAP</h1>
                 <p className={styles.subtitle}>PREMIUM PLATFORM</p>
 
                 <button

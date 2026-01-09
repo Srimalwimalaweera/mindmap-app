@@ -232,7 +232,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-zinc-900">
+    <div className="min-h-screen bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)]">
       {/* Header */}
       <Header
         user={user}
@@ -247,25 +247,30 @@ export default function Dashboard() {
           setIsOpen: setIsTrashOpen,
           count: trashedMaps.length
         }}
+      // Force transparency/glass for header to match new theme
+      // We might need to handle this inside Header, but for now let's leave Header as is or assume it adapts if it uses transparency.
+      // Actually, let's pass a prop or rely on it adapting to dark mode if we were switching mode, 
+      // but here we are forcing a style. The Header has hardcoded colors.
+      // Let's rely on the user having transparency in Header already (bg-white/80 etc).
       />
 
       <main className="container mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-bold text-gray-800 dark:text-white">Your Projects</h2>
+          <h2 className="text-2xl font-bold text-white">Your Projects</h2>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
           {/* Create New Project Card */}
           <button
             onClick={() => setIsNewProjectModalOpen(true)}
-            className="group flex flex-col items-center justify-center h-48 bg-white dark:bg-zinc-800 rounded-xl border-2 border-dashed border-gray-300 dark:border-zinc-600 hover:border-blue-500 dark:hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-zinc-700/50 transition-all cursor-pointer"
+            className="group flex flex-col items-center justify-center h-48 bg-white/5 backdrop-blur-md rounded-[30px] border border-white/10 hover:border-blue-500/50 hover:bg-white/10 transition-all cursor-pointer shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
           >
-            <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+            <div className="w-12 h-12 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-lg shadow-blue-500/10">
               <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
             </div>
-            <span className="font-medium text-gray-600 group-hover:text-blue-600 dark:text-gray-300 dark:group-hover:text-blue-400">Create New Project</span>
+            <span className="font-medium text-gray-300 group-hover:text-blue-400">Create New Project</span>
           </button>
 
           {/* Project Cards */}
@@ -273,13 +278,13 @@ export default function Dashboard() {
             <div
               key={map.id}
               onClick={() => router.push(`/map/${map.id}`)}
-              className="group relative flex flex-col h-48 bg-white dark:bg-zinc-800 rounded-xl shadow-sm hover:shadow-md border border-gray-100 dark:border-zinc-700 overflow-hidden cursor-pointer transition-all hover:-translate-y-1"
+              className="group relative flex flex-col h-48 bg-white/5 backdrop-blur-md rounded-[30px] shadow-[0_20px_60px_rgba(0,0,0,0.4)] hover:shadow-[0_20px_60px_rgba(0,0,0,0.6)] border border-white/10 hover:border-white/20 overflow-hidden cursor-pointer transition-all hover:-translate-y-1"
             >
               {/* Pin & Trash Buttons */}
-              <div className="absolute top-2 right-2 flex gap-1 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+              <div className="absolute top-2 right-2 flex gap-1 z-10">
                 <button
                   onClick={(e) => handlePin(e, map)}
-                  className={`p-1.5 rounded-full backdrop-blur-sm transition-colors ${map.isPinned ? 'bg-blue-100 text-blue-600' : 'bg-white/50 hover:bg-blue-50 hover:text-blue-600 text-gray-400'}`}
+                  className={`p-1.5 rounded-full backdrop-blur-md transition-all duration-200 hover:scale-110 active:scale-95 flex items-center justify-center border border-white/10 ${map.isPinned ? 'bg-blue-500/80 text-white shadow-[0_0_10px_rgba(59,130,246,0.5)]' : 'bg-white/10 text-white hover:bg-white/20'}`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={map.isPinned ? "currentColor" : "none"} strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0111.186 0z" />
@@ -287,7 +292,7 @@ export default function Dashboard() {
                 </button>
                 <button
                   onClick={(e) => handleSoftDelete(e, map)}
-                  className="p-1.5 rounded-full bg-white/50 hover:bg-red-50 hover:text-red-600 text-gray-400 backdrop-blur-sm transition-colors"
+                  className="p-1.5 rounded-full bg-white/10 text-white backdrop-blur-md transition-all duration-200 hover:scale-110 active:scale-95 hover:bg-red-500/50 flex items-center justify-center border border-white/10"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
                     <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
@@ -306,8 +311,8 @@ export default function Dashboard() {
                 </div>
               )}
 
-              <div className="flex-1 p-6 bg-gradient-to-br from-gray-50 to-white dark:from-zinc-800 dark:to-zinc-700/50">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${map.type === 'book' ? 'bg-amber-100 text-amber-600' : 'bg-purple-100 text-purple-600'}`}>
+              <div className="flex-1 p-6 bg-transparent">
+                <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${map.type === 'book' ? 'bg-amber-500/20 text-amber-400' : 'bg-purple-500/20 text-purple-400'} shadow-lg shadow-black/5`}>
                   {map.type === 'book' ? (
                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
@@ -318,8 +323,8 @@ export default function Dashboard() {
                     </svg>
                   )}
                 </div>
-                <h3 className="font-semibold text-gray-800 dark:text-white truncate pr-4">{map.title}</h3>
-                <p className="text-xs text-gray-500 mt-2">
+                <h3 className="font-semibold text-white truncate pr-4">{map.title}</h3>
+                <p className="text-xs text-gray-400 mt-2">
                   {map.type === 'book' ? 'Digital Book' : 'Mind Map'} • {new Date(map.updatedAt).toLocaleDateString()}
                 </p>
               </div>
