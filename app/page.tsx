@@ -18,6 +18,7 @@ import Image from 'next/image';
 
 import LandingPage from './components/LandingPage';
 import Header from './components/Header';
+import LoadingScreen from './components/LoadingScreen';
 
 export default function Dashboard() {
   const [maps, setMaps] = useState<MindMapData[]>([]);
@@ -224,7 +225,7 @@ export default function Dashboard() {
     setMaps([]);
   };
 
-  if (loading) return <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-zinc-900 text-gray-500">Loading...</div>;
+  if (loading) return <LoadingScreen />;
 
   // Use the new LandingPage component when not logged in
   if (!user) {

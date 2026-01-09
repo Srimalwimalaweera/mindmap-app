@@ -1192,7 +1192,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
             )}
 
             {/* Floating Control Bar */}
-            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-3 bg-white/5 backdrop-blur-md p-2 px-4 rounded-full shadow-2xl border border-white/10 z-[50]">
+            <div className="fixed bottom-4 md:bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-1 md:gap-3 bg-white/5 backdrop-blur-md p-1.5 px-3 md:p-2 md:px-4 rounded-full shadow-2xl border border-white/10 z-[50] max-w-[95vw] overflow-x-auto no-scrollbar">
                 {viewMode === 'visual' && (
                     <div className="flex items-center gap-1 pr-3 border-r border-white/10">
                         <div className="flex items-center gap-0.5 mr-2 pr-2 border-r border-white/10">

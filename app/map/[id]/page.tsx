@@ -13,6 +13,7 @@ import { useUndoRedo } from '@/app/hooks/useUndoRedo';
 import MindMapEditor from '@/app/components/MindMapLoader';
 import Header from '@/app/components/Header';
 import AutoSaveControl from '@/app/components/AutoSaveControl';
+import LoadingScreen from '@/app/components/LoadingScreen';
 
 // const MindMapEditor = dynamic(() => import('@/app/components/MindMapEditor'), { ssr: false });
 export const runtime = 'edge';
@@ -95,7 +96,7 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
         router.push('/');
     };
 
-    if (loading) return <div className="flex h-screen items-center justify-center bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)] text-white">Loading...</div>;
+    if (loading) return <LoadingScreen />;
 
     return (
         <div className="flex h-screen flex-col bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)] text-white">
