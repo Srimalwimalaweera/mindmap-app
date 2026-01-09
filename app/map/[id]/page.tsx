@@ -18,26 +18,23 @@ import LoadingScreen from '@/app/components/LoadingScreen';
 // const MindMapEditor = dynamic(() => import('@/app/components/MindMapEditor'), { ssr: false });
 export const runtime = 'edge';
 
+import { useAuth } from '@/app/context/AuthProvider';
+// ...
+
 export default function MapEditorPage({ params }: { params: Promise<{ id: string }> }) {
     // Unwrap params using React.use()
     const { id } = use(params);
 
     const { state: markdown, set: setMarkdown, reset: resetMarkdown, undo, redo, canUndo, canRedo } = useUndoRedo('', 50);
-    const [user, setUser] = useState<User | null>(null);
-    const [loading, setLoading] = useState(true);
+    const { user, loading: authLoading } = useAuth(); // Global Auth
+    const loading = authLoading;
     const [saving, setSaving] = useState(false);
     const [lastSavedMarkdown, setLastSavedMarkdown] = useState('');
     const [autoSaveInterval, setAutoSaveInterval] = useState(30 * 60 * 1000); // Default 30 min
     const [scheduledSaveTime, setScheduledSaveTime] = useState<number | null>(null);
     const router = useRouter();
 
-    useEffect(() => {
-        const unsubscribe = auth.onAuthStateChanged((currentUser) => {
-            setUser(currentUser);
-            setLoading(false);
-        });
-        return () => unsubscribe();
-    }, []);
+    // Removed local useEffect for onAuthStateChanged
 
     // Initial Load
     useEffect(() => {
@@ -101,7 +98,6 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
     return (
         <div className="flex h-screen flex-col bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)] text-white">
             <Header
-                user={user}
                 hideTitle={true}
                 actions={
                     <AutoSaveControl

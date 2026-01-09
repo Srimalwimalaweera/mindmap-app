@@ -20,10 +20,18 @@ import LandingPage from './components/LandingPage';
 import Header from './components/Header';
 import LoadingScreen from './components/LoadingScreen';
 
+import { useAuth } from '@/app/context/AuthProvider';
+// ... (keep other imports)
+
 export default function Dashboard() {
+  const { user, userData, settings, loading: authLoading, logout } = useAuth(); // Use global auth
   const [maps, setMaps] = useState<MindMapData[]>([]);
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  // const [loading, setLoading] = useState(true); // Removed local loading
+  const loading = authLoading; // Alias for compatibility with existing code if needed, or just use authLoading directly. 
+  // Actually, let's keep a local loading for maps? 
+  // The original code set loading=false after auth check AND map load. 
+  // Let's create a combined loading 
+  const [mapsLoading, setMapsLoading] = useState(true);
 
   // Creation State
   const [creating, setCreating] = useState(false);
@@ -86,19 +94,22 @@ export default function Dashboard() {
       setMaps(mapsKeep);
     } catch (e) {
       console.error("Error loading maps", e);
+    } finally {
+      setMapsLoading(false);
     }
   };
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        await loadMaps(currentUser);
+    if (!authLoading) {
+      if (user) {
+        loadMaps(user);
+      } else {
+        setMapsLoading(false); // No user, stop loading (will redirect in render)
       }
-      setLoading(false);
-    });
-    return () => unsubscribe();
-  }, [router]);
+    }
+  }, [user, authLoading]);
+
+  // Derived State ...
 
   // Derived State
   const { activeMaps, trashedMaps } = useMemo(() => {
@@ -120,12 +131,28 @@ export default function Dashboard() {
   }, [maps, searchTerm]);
 
 
-  // Actions
+  // const { user, userData, settings, loading: authLoading } = useAuth(); // Moved to top
+  // ...
   const handleCreate = async () => {
     if (!newMapTitle.trim() || !user) return;
+
+    // Limit Check
+    if (userData && settings) {
+      // Base limit from plan settings (or default 10 if missing)
+      const baseLimit = settings.projectLimits[userData.plan] ?? 10;
+      const totalLimit = baseLimit + (userData.extraSlots || 0);
+
+      // Check active maps count
+      if (activeMaps.length >= totalLimit) {
+        alert(`Project limit reached (${totalLimit}). Upgrade to Pro/Ultra or buy slots.`);
+        return;
+      }
+    }
+
     setCreating(true);
     try {
       const newMapId = await createMindMap(user.uid, newMapTitle, selectedType);
+      // ...
 
       // If it's a map, go to editor. If book, maybe just show in list for now (as user said feature comes later)
       // For now, regardless of type, we redirect to map editor or stays on dashboard. 
@@ -151,6 +178,21 @@ export default function Dashboard() {
     e.stopPropagation();
     if (!user) return;
     const newStatus = !map.isPinned;
+
+    if (newStatus && userData && settings) {
+      // Limit Check for Pinning
+      const baseLimit = settings.pinLimits[userData.plan] ?? 5;
+      // Ultra is 0 (unlimited)
+      if (baseLimit > 0) {
+        const totalLimit = baseLimit + (userData.extraPins || 0);
+        const currentPinned = activeMaps.filter(m => m.isPinned).length;
+        if (currentPinned >= totalLimit) {
+          alert(`Pin limit reached (${totalLimit}). Upgrade plan for more.`);
+          return;
+        }
+      }
+    }
+
     // Optimistic update
     setMaps(maps.map(m => m.id === map.id ? { ...m, isPinned: newStatus } : m));
     await togglePinMindMap(map.id, newStatus);
@@ -220,12 +262,13 @@ export default function Dashboard() {
     );
   };
 
+  // const { logout } = useAuth(); // Moved to top
   const handleLogout = async () => {
-    await signOut(auth);
+    await logout();
     setMaps([]);
   };
 
-  if (loading) return <LoadingScreen />;
+  if (authLoading || mapsLoading) return <LoadingScreen />;
 
   // Use the new LandingPage component when not logged in
   if (!user) {
@@ -236,8 +279,6 @@ export default function Dashboard() {
     <div className="min-h-screen bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)]">
       {/* Header */}
       <Header
-        user={user}
-        onLogout={handleLogout}
         search={{
           isOpen: isSearchOpen,
           setIsOpen: setIsSearchOpen,

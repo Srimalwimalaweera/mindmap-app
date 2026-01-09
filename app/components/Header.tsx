@@ -2,12 +2,16 @@
 
 import Link from 'next/link';
 import Image from 'next/image';
-import { User } from 'firebase/auth';
 import { useRouter, usePathname } from 'next/navigation';
+// ... imports
+import { useAuth } from '../context/AuthProvider';
+import ProfilePanel, { ProfileModal, UpgradeModal, BuySlotsModal, SettingsModal } from './ProfilePanel';
+import { useState } from 'react';
 
+// Simplified Header Props (remove user/onLogout props as they come from context)
 interface HeaderProps {
-    user: User | null;
-    onLogout?: () => void;
+    // user: User | null; // Removed
+    // onLogout?: () => void; // Removed
     search?: {
         isOpen: boolean;
         setIsOpen: (isOpen: boolean) => void;
@@ -16,19 +20,33 @@ interface HeaderProps {
     };
     trash?: {
         setIsOpen: (isOpen: boolean) => void;
-        count: number; // Added count back
+        count: number;
     };
     hideTitle?: boolean;
     actions?: React.ReactNode;
 }
 
-export default function Header({ user, onLogout, search, trash, actions, hideTitle = false }: HeaderProps) {
+export default function Header({ search, trash, actions, hideTitle = false }: HeaderProps) {
+    const { user } = useAuth(); // Use Context
     const router = useRouter();
     const pathname = usePathname();
     const isEditMode = pathname?.startsWith('/map/');
+    const [showProfile, setShowProfile] = useState(false);
+    const [activeModal, setActiveModal] = useState<'profile' | 'upgrade' | 'slots' | 'settings' | null>(null);
+
+    const handleAction = (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => {
+        setShowProfile(false);
+        setActiveModal(modal);
+    };
+
+    // ... (Logos and Navigation logic remains same)
 
     return (
         <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-white/5 backdrop-blur-md shadow-sm border-b border-white/10">
+            {/* Logo Section ... (Keep as is, just copy logic if needed or assume unchanged outside replace block if small) */}
+            {/* Actually I need to be careful not to delete the logo section if I replace huge chunks. 
+                 Let's target the exact return block or render user section. 
+             */}
             <div className="flex items-center gap-2">
                 {isEditMode && (
                     <button
@@ -43,6 +61,7 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
                     </button>
                 )}
                 <Link href="/" className="flex items-center gap-2" title="Go to Dashboard">
+                    {/* SVG Logo ... keep existing ... */}
                     <div className="w-8 h-8 flex items-center justify-center">
                         <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
                             viewBox="0 0 128 128" enableBackground="new 0 0 128 128" xmlSpace="preserve" className="w-full h-full">
@@ -117,30 +136,41 @@ export default function Header({ user, onLogout, search, trash, actions, hideTit
 
                 {/* User Profile */}
                 {user ? (
-                    <>
-                        <div className="flex items-center gap-3 pl-4 border-l border-white/10 ml-2">
+                    <div className="relative">
+                        {/* Transparent Overlay for closing dropdown */}
+                        {showProfile && (
+                            <div className="fixed inset-0 z-50 cursor-default" onClick={() => setShowProfile(false)} />
+                        )}
+
+                        <button
+                            className="flex items-center gap-3 pl-4 border-l border-white/10 ml-2 focus:outline-none relative z-[51]" // z-51 to stay above overlay
+                            onClick={() => setShowProfile(!showProfile)}
+                        >
                             {user.photoURL ? (
                                 <Image
                                     src={user.photoURL}
                                     alt="User"
-                                    className="rounded-full shadow-sm"
+                                    className="rounded-full shadow-sm hover:ring-2 hover:ring-blue-500 transition-all"
                                     width={32}
                                     height={32}
                                 />
                             ) : (
-                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold">
+                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold hover:ring-2 hover:ring-blue-500 transition-all">
                                     {user.displayName?.[0] || 'U'}
                                 </div>
                             )}
-                        </div>
-                        {onLogout && (
-                            <button onClick={onLogout} className="p-2 text-gray-300 hover:text-red-500 transition-colors" title="Logout">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
-                                </svg>
-                            </button>
+                        </button>
+
+                        {showProfile && (
+                            <ProfilePanel onClose={() => setShowProfile(false)} onAction={handleAction} />
                         )}
-                    </>
+
+                        {/* Modals managed by Header state to persist after dropdown close */}
+                        {activeModal === 'profile' && <ProfileModal isOpen={true} onClose={() => setActiveModal(null)} />}
+                        {activeModal === 'upgrade' && <UpgradeModal isOpen={true} onClose={() => setActiveModal(null)} />}
+                        {activeModal === 'slots' && <BuySlotsModal isOpen={true} onClose={() => setActiveModal(null)} />}
+                        {activeModal === 'settings' && <SettingsModal isOpen={true} onClose={() => setActiveModal(null)} />}
+                    </div>
                 ) : (
                     <button
                         onClick={() => router.push('/login')}

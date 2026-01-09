@@ -1,5 +1,5 @@
 import { db } from "@/lib/firebase";
-import { collection, doc, getDoc, getDocs, query, where, addDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where, addDoc, updateDoc, deleteDoc, writeBatch, increment } from "firebase/firestore";
 
 export interface MindMapData {
     id: string;
@@ -32,6 +32,22 @@ export async function createMindMap(userId: string, title: string, type: 'map' |
     };
 
     const docRef = await addDoc(collection(db, "markmaps"), docData);
+
+    // Update User Stats
+    try {
+        const userRef = doc(db, "users", userId);
+        const updatePayload: any = {
+            projectCount: increment(1),
+            totalMaps: increment(1) // Total created all time
+        };
+        if (type === 'book') {
+            updatePayload.totalBooks = increment(1);
+        }
+        await updateDoc(userRef, updatePayload);
+    } catch (e) {
+        console.error("Error updating user stats", e);
+    }
+
     return docRef.id;
 }
 
@@ -92,6 +108,26 @@ export async function restoreMindMap(mapId: string) {
 
 export async function permanentDeleteMindMap(mapId: string) {
     const mapRef = doc(db, "markmaps", mapId);
+
+    // Attempt to get doc to find userId for decrementing stats
+    // Note: If doc is already deleted (race condition), this might fail to decrement.
+    // For strict consistency, cloud functions are better, but client-side is acceptable here.
+    try {
+        const snap = await getDoc(mapRef);
+        if (snap.exists()) {
+            const data = snap.data();
+            const userId = data.userId;
+            if (userId) {
+                const userRef = doc(db, "users", userId);
+                await updateDoc(userRef, {
+                    projectCount: increment(-1)
+                });
+            }
+        }
+    } catch (e) {
+        console.error("Error updating stats on delete", e);
+    }
+
     await deleteDoc(mapRef);
 }
 
