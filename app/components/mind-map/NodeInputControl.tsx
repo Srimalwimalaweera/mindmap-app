@@ -19,21 +19,51 @@ type InputMode = 'text' | 'link' | 'list' | 'table' | 'media' | 'code';
 
 export default function NodeInputControl({ initialValue, onSubmit, onCancel }: NodeInputControlProps) {
     // Parsing initial value for Task/List Mode
-    // Checkbox: "- [ ] text" or "- [x] text"
-    const taskMatch = initialValue.match(/^-\s\[( |x)\]\s([\s\S]*)/);
-    const initialIsTask = !!taskMatch;
-    const initialChecked = taskMatch ? taskMatch[1] === 'x' : false;
-    let initialText = taskMatch ? taskMatch[2] : initialValue;
+    // We support "Block List Mode" where multiple lines can be detected as a list.
+    // Enhanced to support HTML Lists for better Markmap rendering inside single node.
 
-    // List: "- text" or "1. text"
-    const listMatch = initialValue.match(/^(-\s|\d+\.\s)([\s\S]*)/);
-    const initialIsList = !!listMatch && !initialIsTask; // Priority to task if overlap
-    const initialListType = listMatch ? (listMatch[1].startsWith('1') ? 'ordered' : 'bullet') : 'bullet';
-    if (initialIsList) {
-        initialText = listMatch![2];
+    // Check for HTML List wrapper
+    const htmlListMatch = initialValue.match(/^<(ul|ol)([\s\S]*)<\/\1>/);
+    let isHtmlList = !!htmlListMatch;
+    let htmlListType: 'bullet' | 'ordered' = htmlListMatch?.[1] === 'ol' ? 'ordered' : 'bullet';
+    let cleanText = initialValue;
+
+    if (isHtmlList && htmlListMatch) {
+        // Extract LI items to Markdown for editing
+        const inner = htmlListMatch[2];
+        // Regex to find <li>content</li>
+        const items = [...inner.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(m => m[1]);
+
+        // Convert back to Markdown lines with markers for "Explicit Editing"
+        if (htmlListType === 'ordered') {
+            cleanText = items.map((item, i) => `${i + 1}. ${item}`).join('\n');
+        } else {
+            cleanText = items.map(item => `- ${item}`).join('\n');
+        }
     }
 
-    const [value, setValue] = useState(initialText);
+    const lines = cleanText.split('\n');
+    const firstLine = lines[0] || '';
+
+    // Regex
+    const taskRegex = /^-\s\[( |x)\]\s/;
+    const listRegex = /^(-\s|\d+\.\s)/;
+
+    // Detect mode based on first line
+    const taskMatch = firstLine.match(taskRegex);
+    const listMatch = firstLine.match(listRegex);
+
+    const initialIsTask = !!taskMatch;
+    // Only detect markdown list if NOT html list (or if html parsing failed but looked like markdown)
+    const initialIsList = isHtmlList || (!!listMatch && !initialIsTask);
+    const initialListType = isHtmlList ? htmlListType : (listMatch ? (listMatch[1].startsWith('1') ? 'ordered' : 'bullet') : 'bullet');
+
+    const initialChecked = taskMatch ? taskMatch[1] === 'x' : false;
+
+    // NO Stripping! We want "Explicit Mode" for editing.
+    // The user sees "- Item 1" and hits Enter to get "- Item 2".
+
+    const [value, setValue] = useState(cleanText);
     const [isTask, setIsTask] = useState(initialIsTask);
     const [isChecked, setIsChecked] = useState(initialChecked);
 
@@ -46,11 +76,29 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
 
     // Combine for Submit
     const getFinalValue = (val: string) => {
+        const lines = val.split('\n').filter(l => l.trim() !== '');
+
         if (isTask) {
-            return `- [${isChecked ? 'x' : ' '}] ${val}`;
+            // Basic Markdown Task List
+            return val;
         }
+
         if (isList) {
-            return listType === 'ordered' ? `1. ${val}` : `- ${val}`;
+            // Output HTML Lists to keep it in ONE node
+            const openTag = listType === 'ordered' ? '<ol>' : '<ul>';
+            const closeTag = listType === 'ordered' ? '</ol>' : '</ul>';
+
+            // Convert Markdown lines to HTML LIs
+            const listItems = lines.map(l => {
+                // Remove marker if present
+                let content = l.replace(/^(-\s|\d+\.\s)/, '');
+                return `<li>${content}</li>`;
+            }).join('');
+
+            // If empty, return just value? No, return formatted block.
+            if (lines.length === 0) return val;
+
+            return `${openTag}${listItems}${closeTag}`;
         }
         return val;
     };
@@ -372,66 +420,62 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
 
         if (e.key === 'Enter') {
             if (e.ctrlKey) {
-                onSubmit(value);
+                onSubmit(getFinalValue(value));
                 return;
             }
 
-            // Auto-continue list logic
+            // Auto-Continue Logic (Standard Markdown)
             const textarea = textareaRef.current;
             if (!textarea) return;
 
             const start = textarea.selectionStart;
             const text = textarea.value;
 
-            // Get current line up to cursor
+            // Get current line context
             const lineStart = text.lastIndexOf('\n', start - 1) + 1;
             const lineEnd = text.indexOf('\n', start);
             const currentLine = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
 
-            // Regex for list markers: 
-            // - Bullet: "- ", "* ", "+ "
-            // - Number: "1. ", "1) "
-            // - Task: "- [ ] ", "- [x] "
-            const listRegex = /^(\s*)([-*+]|\d+[\.)]|- \[ \]|-\s\[x\])\s+/;
+            // Matches: "- ", "* ", "1. ", "10. "
+            const listRegex = /^(\s*)(-[ ]|\d+\.[ ])/;
             const match = currentLine.match(listRegex);
 
             if (match) {
-                e.preventDefault();
-                const fullMatch = match[0];
-                const contentAfter = currentLine.substring(fullMatch.length).trim();
+                // If the user hit Enter on a line that consists ONLY of the marker, they probably want to exit the list.
+                const marker = match[0];
+                const content = currentLine.substring(marker.length).trim();
 
-                // If line is empty (just the marker), clear it (end list)
-                if (!contentAfter) {
+                if (!content) {
+                    e.preventDefault();
+                    // Remove the empty marker on current line
                     const newValue = text.substring(0, lineStart) + text.substring(lineEnd === -1 ? text.length : lineEnd + 1);
                     setValue(newValue);
-                    // Selection handling might be tricky here, simple fallback involves re-focus
-                } else {
-                    // Continue list
-                    let nextMarker = fullMatch;
 
-                    // Handle resizing numbers if needed (simplified: just keep same number or increment)
-                    // For improved DX, we can increment numbers, but let's stick to copying for robustness first, 
-                    // or simple increment if it parses consistently.
-                    const numMatch = fullMatch.match(/^(\s*)(\d+)([\.)]\s+)/);
-                    if (numMatch) {
-                        const num = parseInt(numMatch[2], 10);
-                        nextMarker = `${numMatch[1]}${num + 1}${numMatch[3]}`;
-                    }
-
-                    // For tasks, always create unchecked "- [ ] "
-                    if (fullMatch.includes('[x]')) {
-                        nextMarker = fullMatch.replace('[x]', '[ ]');
-                    }
-
-                    const newValue = text.substring(0, start) + '\n' + nextMarker + text.substring(start);
-                    setValue(newValue);
-
-                    // Move cursor
-                    setTimeout(() => {
-                        textarea.setSelectionRange(start + 1 + nextMarker.length, start + 1 + nextMarker.length);
-                        textarea.scrollTop = textarea.scrollHeight; // Scroll to bottom
-                    }, 0);
+                    // Toggle list off if we were tracking it, but primarily we depend on text now.
+                    // This is "soft exit"
+                    return;
                 }
+
+                e.preventDefault();
+
+                // Determine next marker
+                let nextMarker = marker;
+                // Auto-increment number
+                const numMatch = marker.match(/^(\s*)(\d+)(\.\s)/);
+                if (numMatch) {
+                    const num = parseInt(numMatch[2], 10);
+                    nextMarker = `${numMatch[1]}${num + 1}${numMatch[3]}`;
+                }
+
+                // Insert "\n" + nextMarker
+                const newValue = text.substring(0, start) + '\n' + nextMarker + text.substring(start);
+                setValue(newValue);
+
+                setTimeout(() => {
+                    const newPos = start + 1 + nextMarker.length;
+                    textarea.setSelectionRange(newPos, newPos);
+                    textarea.scrollTop = textarea.scrollHeight;
+                }, 0);
             }
         }
     };

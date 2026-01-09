@@ -34,6 +34,25 @@ body {
   color: #ffffff !important;
 }
 
+/* Ensure Lists in Markmap are visible */
+.markmap-svg ul {
+    list-style-type: disc !important;
+    padding-left: 1.25rem !important;
+    margin-top: 0.25rem !important;
+    margin-bottom: 0.25rem !important;
+}
+
+.markmap-svg ol {
+    list-style-type: decimal !important;
+    padding-left: 1.25rem !important;
+    margin-top: 0.25rem !important;
+    margin-bottom: 0.25rem !important;
+}
+
+.markmap-svg li {
+    display: list-item !important; /* Force list-item display */
+}
+
 @keyframes shimmer {
   to {
     background-position: 200% center;
