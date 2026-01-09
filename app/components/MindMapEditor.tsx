@@ -15,6 +15,7 @@ interface EditorProps {
     onRedo?: () => void;
     canUndo?: boolean;
     canRedo?: boolean;
+    onSave?: () => Promise<void>;
 }
 
 interface EditingState {
@@ -32,7 +33,7 @@ interface EditingState {
 
 type ViewMode = 'visual' | 'note';
 
-export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRedo, canUndo = false, canRedo = false }: EditorProps) {
+export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRedo, canUndo = false, canRedo = false, onSave }: EditorProps) {
     const svgRef = useRef<SVGSVGElement>(null);
     const mmRef = useRef<Markmap | null>(null);
     const wrapperRef = useRef<HTMLDivElement>(null);
@@ -43,6 +44,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     // New States for Advanced Interaction
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string; payload: any } | null>(null);
+    const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
     // Track expanded lines (Visual only, resets on reload)
     const [expandedLines, setExpandedLines] = useState<Set<number>>(new Set());
 
@@ -294,7 +296,11 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         if (editingRef.current?.mode === 'menu') {
                             setEditing(null);
                         }
+                        if (editingRef.current?.mode === 'menu') {
+                            setEditing(null);
+                        }
                         setContextMenu(null);
+                        setDownloadMenuOpen(false);
                     });
 
                     // D. Context Menu (Right Click)
@@ -311,6 +317,11 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 const d = d3.select(nodeGroup).datum() as any;
                                 const dataNode = d?.data || d;
                                 const nodeId = dataNode.state?.id || dataNode.id || 'unknown';
+
+                                // Disable context menu for Root Node (Depth 0)
+                                if ((d?.depth === 0) || (dataNode?.depth === 0)) {
+                                    return;
+                                }
 
                                 const [bx, by] = d3.pointer(event, wrapperRef.current);
                                 setContextMenu({
@@ -705,6 +716,164 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     const handleZoomOut = () => { if (mmRef.current) mmRef.current.rescale(0.8); };
     const handleFit = () => { if (mmRef.current) mmRef.current.fit(); };
 
+    // --- Download Actions ---
+    const prepareDownload = async () => {
+        if (onSave) {
+            await onSave();
+        }
+    };
+
+    const handleDownloadText = async () => {
+        await prepareDownload();
+        const blob = new Blob([markdown], { type: 'text/markdown' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'mindmap.md';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setDownloadMenuOpen(false);
+    };
+
+    const handleDownloadSVG = async () => {
+        await prepareDownload();
+        if (!svgRef.current) return;
+
+        const svgData = new XMLSerializer().serializeToString(svgRef.current);
+        const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'mindmap.svg';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setDownloadMenuOpen(false);
+    };
+
+    const handleDownloadHTML = async () => {
+        await prepareDownload();
+
+        const htmlContent = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mind Map Export</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #1e1e2e; color: #fff; font-family: sans-serif; }
+        #app { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
+        #svg-container { flex: 1; width: 100%; height: 100%; position: relative; }
+        svg { width: 100%; height: 100%; }
+        
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            gap: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            padding: 8px;
+            border-radius: 50px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        
+        button {
+            background: transparent;
+            border: none;
+            color: #ddd;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+        
+        button:hover {
+            background: rgba(255, 255, 255, 0.2);
+            color: #fff;
+        }
+
+        .hidden { display: none !important; }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markmap-view"></script>
+    <script src="https://cdn.jsdelivr.net/npm/markmap-lib"></script>
+</head>
+<body>
+    <div id="app">
+        <div id="svg-container">
+            <svg id="mindmap"></svg>
+        </div>
+        
+        <div class="controls">
+             <button onclick="handleZoomOut()" title="Zoom Out">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <button onclick="handleFit()" title="Fit to Screen">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            </button> 
+            <button onclick="handleZoomIn()" title="Zoom In">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <button onclick="toggleFullscreen()" title="Fullscreen">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const markdown = \`${markdown.replace(/`/g, '\\`').replace(/\$/g, '\\$')}\`;
+        const transformer = new markmap.Transformer();
+        const { root } = transformer.transform(markdown);
+        let mm;
+
+        function init() {
+            mm = markmap.Markmap.create('#mindmap', {
+                autoFit: true,
+                zoom: true,
+                pan: true,
+            }, root);
+        }
+
+        function handleZoomIn() { mm.rescale(1.2); }
+        function handleZoomOut() { mm.rescale(0.8); }
+        function handleFit() { mm.fit(); }
+        function toggleFullscreen() {
+             if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>`;
+
+        const blob = new Blob([htmlContent], { type: 'text/html' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'mindmap.html';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        setDownloadMenuOpen(false);
+    };
+
+
     const toggleFullscreen = () => {
         if (!document.fullscreenElement) {
             wrapperRef.current?.requestFullscreen();
@@ -1016,6 +1185,38 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 <line x1="8" y1="11" x2="14" y2="11" />
                             </svg>
                         </button>
+
+                        {/* Download Button */}
+                        <div className="relative">
+                            <button
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDownloadMenuOpen(!downloadMenuOpen);
+                                }}
+                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors"
+                                title="Download"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                    <polyline points="7 10 12 15 17 10" />
+                                    <line x1="12" y1="15" x2="12" y2="3" />
+                                </svg>
+                            </button>
+                            {downloadMenuOpen && (
+                                <div className="absolute bottom-full right-0 mb-2 min-w-[180px] bg-white dark:bg-zinc-800 rounded-lg shadow-xl border border-zinc-200 dark:border-zinc-700 overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col z-[50]">
+                                    <button onClick={handleDownloadHTML} className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2">
+                                        <span className="text-orange-500 font-bold">HTML</span> Download as HTML
+                                    </button>
+                                    <button onClick={handleDownloadSVG} className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2">
+                                        <span className="text-blue-500 font-bold">SVG</span> Download as SVG
+                                    </button>
+                                    <button onClick={handleDownloadText} className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2">
+                                        <span className="text-gray-500 font-bold">TXT</span> Download as Note
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+
                         <button onClick={handleFit} className="px-3 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-xs font-medium transition-colors" title="Fit to Screen">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />

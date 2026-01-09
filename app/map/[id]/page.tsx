@@ -105,6 +105,7 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
                     onRedo={redo}
                     canUndo={canUndo}
                     canRedo={canRedo}
+                    onSave={handleSave}
                 />
             </main>
         </div>
