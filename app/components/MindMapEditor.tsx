@@ -1165,10 +1165,10 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
 
             {/* Note Mode */}
             {viewMode === 'note' && (
-                <div className="w-full h-full flex flex-col p-8 animate-in fade-in duration-300 bg-zinc-50 dark:bg-zinc-950">
+                <div className="w-full h-full flex flex-col p-8 animate-in fade-in duration-300 bg-transparent">
                     <div className="max-w-3xl mx-auto w-full h-full flex flex-col">
                         <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-xl font-bold text-zinc-700 dark:text-zinc-300 flex items-center gap-2">
+                            <h2 className="text-xl font-bold text-white flex items-center gap-2">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500">
                                     <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" />
                                     <polyline points="14 2 14 8 20 8" />
@@ -1179,7 +1179,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         </div>
 
                         <textarea
-                            className="flex-1 w-full bg-white dark:bg-zinc-900 p-6 rounded-lg shadow-sm border border-zinc-200 dark:border-zinc-800 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono text-sm leading-relaxed text-zinc-800 dark:text-zinc-200"
+                            className="flex-1 w-full bg-white/5 backdrop-blur-md p-6 rounded-lg shadow-sm border border-white/10 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500/50 font-mono text-sm leading-relaxed text-white placeholder-gray-400"
                             value={markdown}
                             onChange={(e) => onMarkdownChange(e.target.value)}
                             placeholder="Start typing your mind map..."
@@ -1192,14 +1192,14 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
             )}
 
             {/* Floating Control Bar */}
-            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-3 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm p-2 px-4 rounded-full shadow-2xl border border-zinc-200 dark:border-zinc-700 z-[50]">
+            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 flex items-center gap-3 bg-white/5 backdrop-blur-md p-2 px-4 rounded-full shadow-2xl border border-white/10 z-[50]">
                 {viewMode === 'visual' && (
-                    <div className="flex items-center gap-1 pr-3 border-r border-zinc-200 dark:border-zinc-700">
-                        <div className="flex items-center gap-0.5 mr-2 pr-2 border-r border-zinc-200 dark:border-zinc-700/50">
+                    <div className="flex items-center gap-1 pr-3 border-r border-white/10">
+                        <div className="flex items-center gap-0.5 mr-2 pr-2 border-r border-white/10">
                             <button
                                 onClick={onUndo}
                                 disabled={!canUndo}
-                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
                                 title="Undo (Ctrl+Z)"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1210,7 +1210,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                             <button
                                 onClick={onRedo}
                                 disabled={!canRedo}
-                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
+                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent transition-colors"
                                 title="Redo (Ctrl+Shift+Z)"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1219,7 +1219,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 </svg>
                             </button>
                         </div>
-                        <button onClick={handleZoomOut} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors" title="Zoom Out">
+                        <button onClick={handleZoomOut} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white transition-colors" title="Zoom Out">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <circle cx="11" cy="11" r="8" />
                                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -1234,7 +1234,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                     e.stopPropagation();
                                     setDownloadMenuOpen(!downloadMenuOpen);
                                 }}
-                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors"
+                                className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
                                 title="Download"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1244,26 +1244,26 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 </svg>
                             </button>
                             {downloadMenuOpen && (
-                                <div className="absolute bottom-full right-0 mb-2 min-w-[180px] bg-white dark:bg-zinc-800 rounded-lg shadow-xl border border-zinc-200 dark:border-zinc-700 overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col z-[50]">
-                                    <button onClick={handleDownloadHTML} className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2">
+                                <div className="absolute bottom-full right-0 mb-2 min-w-[180px] bg-zinc-900 rounded-lg shadow-xl border border-white/10 overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col z-[50]">
+                                    <button onClick={handleDownloadHTML} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
                                         <span className="text-orange-500 font-bold">HTML</span> Download as HTML
                                     </button>
-                                    <button onClick={handleDownloadSVG} className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2">
+                                    <button onClick={handleDownloadSVG} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
                                         <span className="text-blue-500 font-bold">SVG</span> Download as SVG
                                     </button>
-                                    <button onClick={handleDownloadText} className="w-full text-left px-4 py-2 text-sm hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200 flex items-center gap-2">
+                                    <button onClick={handleDownloadText} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
                                         <span className="text-gray-500 font-bold">TXT</span> Download as Note
                                     </button>
                                 </div>
                             )}
                         </div>
 
-                        <button onClick={handleFit} className="px-3 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 text-xs font-medium transition-colors" title="Fit to Screen">
+                        <button onClick={handleFit} className="px-3 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white text-xs font-medium transition-colors" title="Fit to Screen">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3" />
                             </svg>
                         </button>
-                        <button onClick={handleZoomIn} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors" title="Zoom In">
+                        <button onClick={handleZoomIn} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white transition-colors" title="Zoom In">
                             <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                 <circle cx="11" cy="11" r="8" />
                                 <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -1274,7 +1274,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     </div>
                 )}
 
-                <button onClick={toggleFullscreen} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors" title="Toggle Fullscreen">
+                <button onClick={toggleFullscreen} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white transition-colors" title="Toggle Fullscreen">
                     {isFullscreen ? (
                         <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3" />
@@ -1286,10 +1286,10 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     )}
                 </button>
 
-                <div className="flex bg-zinc-100 dark:bg-zinc-700 rounded-full p-1 relative ml-1">
+                <div className="flex bg-white/5 rounded-full p-1 relative ml-1 border border-white/10">
                     <button
                         onClick={() => setViewMode('visual')}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${viewMode === 'visual' ? 'bg-white dark:bg-zinc-600 shadow-sm text-blue-600 dark:text-blue-400' : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${viewMode === 'visual' ? 'bg-white/10 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
@@ -1300,7 +1300,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     </button>
                     <button
                         onClick={() => setViewMode('note')}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${viewMode === 'note' ? 'bg-white dark:bg-zinc-600 shadow-sm text-blue-600 dark:text-blue-400' : 'text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300'}`}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${viewMode === 'note' ? 'bg-white/10 text-white shadow-sm' : 'text-gray-400 hover:text-white hover:bg-white/5'}`}
                     >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
@@ -1309,7 +1309,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         Note
                     </button>
                 </div>
-            </div>
-        </div>
+            </div >
+        </div >
     );
 }
