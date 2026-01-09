@@ -171,6 +171,13 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                     </div>`;
                                 });
 
+                                // Checkboxes (Visual Replacement)
+                                // Replace "- [ ] " or "- [x] " at start or inline
+                                node.content = node.content.replace(/- \[( |x)\]/g, (match: string, checkState: string) => {
+                                    const isChecked = checkState === 'x';
+                                    return `<input type="checkbox" ${isChecked ? 'checked' : ''} onclick="return false;" style="cursor: default; pointer-events: none; margin-right: 4px; vertical-align: middle;">`;
+                                });
+
                                 // Link Handling (Target Blank)
                                 node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
 
@@ -447,6 +454,12 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 <button class="load-media-btn" data-src="${url}" data-type="video" style="padding:2px 8px; font-size:10px; cursor:pointer; background:#8b5cf6; color:white; border:none; border-radius:4px;">Load Video</button>
                             </div>
                         </div>`;
+                    });
+
+                    // Checkboxes (Visual Replacement) - SYNCED
+                    node.content = node.content.replace(/- \[( |x)\]/g, (match: string, checkState: string) => {
+                        const isChecked = checkState === 'x';
+                        return `<input type="checkbox" ${isChecked ? 'checked' : ''} onclick="return false;" style="cursor: default; pointer-events: none; margin-right: 4px; vertical-align: middle;">`;
                     });
 
                     const mediaMatch = node.content.match(/\.(jpeg|jpg|gif|png|mp4|webm|webp)/i);
@@ -1094,9 +1107,9 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     {editing && (
                         <div
                             style={{
-                                position: 'absolute',
-                                left: editing.x,
-                                top: editing.y,
+                                position: 'fixed',
+                                top: '50%',
+                                left: '50%',
                                 transform: 'translate(-50%, -50%)',
                                 zIndex: 9999,
                             }}

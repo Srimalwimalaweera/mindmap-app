@@ -18,9 +18,64 @@ interface NodeInputControlProps {
 type InputMode = 'text' | 'link' | 'list' | 'table' | 'media' | 'code';
 
 export default function NodeInputControl({ initialValue, onSubmit, onCancel }: NodeInputControlProps) {
-    const [value, setValue] = useState(initialValue);
+    // Parsing initial value for Task/List Mode
+    // Checkbox: "- [ ] text" or "- [x] text"
+    const taskMatch = initialValue.match(/^-\s\[( |x)\]\s([\s\S]*)/);
+    const initialIsTask = !!taskMatch;
+    const initialChecked = taskMatch ? taskMatch[1] === 'x' : false;
+    let initialText = taskMatch ? taskMatch[2] : initialValue;
+
+    // List: "- text" or "1. text"
+    const listMatch = initialValue.match(/^(-\s|\d+\.\s)([\s\S]*)/);
+    const initialIsList = !!listMatch && !initialIsTask; // Priority to task if overlap
+    const initialListType = listMatch ? (listMatch[1].startsWith('1') ? 'ordered' : 'bullet') : 'bullet';
+    if (initialIsList) {
+        initialText = listMatch![2];
+    }
+
+    const [value, setValue] = useState(initialText);
+    const [isTask, setIsTask] = useState(initialIsTask);
+    const [isChecked, setIsChecked] = useState(initialChecked);
+
+    // List State
+    const [isList, setIsList] = useState(initialIsList);
+    const [listType, setListType] = useState<'bullet' | 'ordered'>(initialListType as 'bullet' | 'ordered');
+
     const [mode, setMode] = useState<InputMode>('text');
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // Combine for Submit
+    const getFinalValue = (val: string) => {
+        if (isTask) {
+            return `- [${isChecked ? 'x' : ' '}] ${val}`;
+        }
+        if (isList) {
+            return listType === 'ordered' ? `1. ${val}` : `- ${val}`;
+        }
+        return val;
+    };
+
+    const handleSubmit = (val: string) => {
+        onSubmit(getFinalValue(val));
+    };
+
+    // Toggle Handlers
+    const toggleTask = () => {
+        if (isList) setIsList(false); // Mutually exclusive
+        setIsTask(!isTask);
+    };
+
+    const toggleList = () => {
+        if (isTask) setIsTask(false); // Mutually exclusive
+        if (isList) {
+            // Cycle: Bullet -> Ordered -> Off
+            if (listType === 'bullet') setListType('ordered');
+            else setIsList(false);
+        } else {
+            setIsList(true);
+            setListType('bullet');
+        }
+    };
 
     // --- Rich Text Handlers ---
     const wrapText = (wrapper: string, endWrapper?: string) => {
@@ -307,6 +362,115 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
         );
     };
 
+    // --- Auto-List & Smart Input Handlers ---
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Escape') {
+            onCancel();
+            return;
+        }
+
+        if (e.key === 'Enter') {
+            if (e.ctrlKey) {
+                onSubmit(value);
+                return;
+            }
+
+            // Auto-continue list logic
+            const textarea = textareaRef.current;
+            if (!textarea) return;
+
+            const start = textarea.selectionStart;
+            const text = textarea.value;
+
+            // Get current line up to cursor
+            const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+            const lineEnd = text.indexOf('\n', start);
+            const currentLine = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
+
+            // Regex for list markers: 
+            // - Bullet: "- ", "* ", "+ "
+            // - Number: "1. ", "1) "
+            // - Task: "- [ ] ", "- [x] "
+            const listRegex = /^(\s*)([-*+]|\d+[\.)]|- \[ \]|-\s\[x\])\s+/;
+            const match = currentLine.match(listRegex);
+
+            if (match) {
+                e.preventDefault();
+                const fullMatch = match[0];
+                const contentAfter = currentLine.substring(fullMatch.length).trim();
+
+                // If line is empty (just the marker), clear it (end list)
+                if (!contentAfter) {
+                    const newValue = text.substring(0, lineStart) + text.substring(lineEnd === -1 ? text.length : lineEnd + 1);
+                    setValue(newValue);
+                    // Selection handling might be tricky here, simple fallback involves re-focus
+                } else {
+                    // Continue list
+                    let nextMarker = fullMatch;
+
+                    // Handle resizing numbers if needed (simplified: just keep same number or increment)
+                    // For improved DX, we can increment numbers, but let's stick to copying for robustness first, 
+                    // or simple increment if it parses consistently.
+                    const numMatch = fullMatch.match(/^(\s*)(\d+)([\.)]\s+)/);
+                    if (numMatch) {
+                        const num = parseInt(numMatch[2], 10);
+                        nextMarker = `${numMatch[1]}${num + 1}${numMatch[3]}`;
+                    }
+
+                    // For tasks, always create unchecked "- [ ] "
+                    if (fullMatch.includes('[x]')) {
+                        nextMarker = fullMatch.replace('[x]', '[ ]');
+                    }
+
+                    const newValue = text.substring(0, start) + '\n' + nextMarker + text.substring(start);
+                    setValue(newValue);
+
+                    // Move cursor
+                    setTimeout(() => {
+                        textarea.setSelectionRange(start + 1 + nextMarker.length, start + 1 + nextMarker.length);
+                        textarea.scrollTop = textarea.scrollHeight; // Scroll to bottom
+                    }, 0);
+                }
+            }
+        }
+    };
+
+    const toggleCheckbox = () => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        const start = textarea.selectionStart;
+        const text = textarea.value;
+        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+        const lineEnd = text.indexOf('\n', start);
+        const actualLineEnd = lineEnd === -1 ? text.length : lineEnd;
+        const currentLine = text.substring(lineStart, actualLineEnd);
+
+        let newLine = currentLine;
+
+        if (currentLine.match(/^\s*- \[ \]\s/)) {
+            // Remove
+            newLine = currentLine.replace(/^\s*- \[ \]\s/, '');
+        } else if (currentLine.match(/^\s*- \[x\]\s/)) {
+            // Remove
+            newLine = currentLine.replace(/^\s*- \[x\]\s/, '');
+        } else {
+            // Add
+            // Respect existing indent?? For now just prepend.
+            newLine = `- [ ] ${currentLine}`;
+        }
+
+        const newValue = text.substring(0, lineStart) + newLine + text.substring(actualLineEnd);
+        setValue(newValue);
+
+        setTimeout(() => {
+            textarea.focus();
+            // Try to keep cursor relatively or at end
+            textarea.setSelectionRange(lineStart + newLine.length, lineStart + newLine.length);
+        }, 0);
+    };
+
     return (
         <div className="flex flex-col gap-1 w-[350px] bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden animate-in fade-in zoom-in-95 duration-200 ring-1 ring-zinc-900/5">
             {/* Top Toolbar: Rich Text */}
@@ -323,19 +487,40 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
             {/* Main Content Area */}
             <div className="p-1 relative min-h-[100px] flex flex-col">
                 {mode === 'text' ? (
-                    <textarea
-                        ref={textareaRef}
-                        className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed"
-                        placeholder="Type something..."
-                        value={value}
-                        onChange={e => setValue(e.target.value)}
-                        onKeyDown={e => {
-                            if (e.key === 'Enter' && e.ctrlKey) onSubmit(value);
-                            if (e.key === 'Escape') onCancel();
-                        }}
-                        onBlur={() => onSubmit(value)}
-                        autoFocus
-                    />
+                    <div className="flex w-full h-full">
+                        {isTask && (
+                            <div className="pt-2 pl-2 pr-1">
+                                <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={e => setIsChecked(e.target.checked)}
+                                    className="w-4 h-4 rounded border-zinc-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                />
+                            </div>
+                        )}
+                        {isList && (
+                            <div className="pt-2.5 pl-3 pr-1 select-none">
+                                {listType === 'ordered' ? (
+                                    <span className="font-mono text-zinc-500 text-sm font-semibold">1.</span>
+                                ) : (
+                                    <span className="text-zinc-900 dark:text-zinc-100 text-xl leading-none">•</span>
+                                )}
+                            </div>
+                        )}
+                        <textarea
+                            ref={textareaRef}
+                            className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed flex-1"
+                            placeholder={isTask ? "Task description..." : (isList ? "List item..." : "Type something...")}
+                            value={value}
+                            onChange={e => setValue(e.target.value)}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter' && e.ctrlKey) handleSubmit(value);
+                                if (e.key === 'Escape') onCancel();
+                            }}
+                            onBlur={() => { /* Wait for explicit Done */ }}
+                            autoFocus
+                        />
+                    </div>
                 ) : (
                     <div className="p-2">
                         {mode === 'link' && <LinkInput />}
@@ -351,8 +536,19 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
             <div className="flex items-center justify-between p-1.5 bg-zinc-50 dark:bg-zinc-800 border-t border-zinc-200 dark:border-zinc-700">
                 <div className="flex items-center gap-1">
                     <ToolBtn icon={<LinkIcon size={14} />} onClick={() => setMode('link')} active={mode === 'link'} title="Link" />
-                    <ToolBtn icon={<CheckSquare size={14} />} onClick={() => setValue(prev => (prev ? prev + '\n' : '') + '- [ ] ')} title="Checkbox" />
-                    <ToolBtn icon={<List size={14} />} onClick={() => setMode('list')} active={mode === 'list'} title="List" />
+                    <ToolBtn
+                        icon={<CheckSquare size={14} />}
+                        onClick={toggleTask}
+                        active={isTask}
+                        title="Checkbox Mode"
+                    />
+                    <ToolBtn
+                        icon={<List size={14} />}
+                        onClick={toggleList}
+                        active={isList}
+                        title={isList ? `List Mode (${listType === 'bullet' ? 'Bullet' : 'Number'})` : "List Mode"}
+                    />
+
                     <ToolBtn icon={<TableIcon size={14} />} onClick={() => setMode('table')} active={mode === 'table'} title="Table" />
                     <div className="w-[1px] h-4 bg-zinc-200 dark:bg-zinc-700 mx-1" />
                     <ToolBtn icon={<ImageIcon size={14} />} onClick={() => setMode('media')} active={mode === 'media'} title="Media" />
@@ -367,7 +563,7 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
                         <X size={16} />
                     </button>
                     <button
-                        onClick={() => onSubmit(value)}
+                        onClick={() => handleSubmit(value)}
                         onMouseDown={e => e.preventDefault()}
                         className="flex items-center gap-1.5 px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded-md shadow-sm transition-all"
                     >
