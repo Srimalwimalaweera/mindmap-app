@@ -53,15 +53,17 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
     const taskMatch = firstLine.match(taskRegex);
     const listMatch = firstLine.match(listRegex);
 
-    const initialIsTask = !!taskMatch;
+    let initialIsTask = !!taskMatch;
     // Only detect markdown list if NOT html list (or if html parsing failed but looked like markdown)
     const initialIsList = isHtmlList || (!!listMatch && !initialIsTask);
     const initialListType = isHtmlList ? htmlListType : (listMatch ? (listMatch[1].startsWith('1') ? 'ordered' : 'bullet') : 'bullet');
 
     const initialChecked = taskMatch ? taskMatch[1] === 'x' : false;
 
-    // NO Stripping! We want "Explicit Mode" for editing.
-    // The user sees "- Item 1" and hits Enter to get "- Item 2".
+    // STRIP Task styling for "Clean Input" mode
+    if (initialIsTask) {
+        cleanText = cleanText.replace(taskRegex, '');
+    }
 
     const [value, setValue] = useState(cleanText);
     const [isTask, setIsTask] = useState(initialIsTask);
@@ -79,8 +81,10 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
         const lines = val.split('\n').filter(l => l.trim() !== '');
 
         if (isTask) {
-            // Basic Markdown Task List
-            return val;
+            // Checkbox Mode: Prepend markdown tag to (clean) text value
+            // User sees "My Task", we save "- [ ] My Task"
+            const checkBoxPrefix = isChecked ? '- [x] ' : '- [ ] ';
+            return checkBoxPrefix + val;
         }
 
         if (isList) {
@@ -110,7 +114,19 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
     // Toggle Handlers
     const toggleTask = () => {
         if (isList) setIsList(false); // Mutually exclusive
-        setIsTask(!isTask);
+
+        const newIsTask = !isTask;
+        setIsTask(newIsTask);
+
+        // When turning on, default to unchecked.
+        if (newIsTask) {
+            setIsChecked(false);
+        }
+
+        const textarea = textareaRef.current;
+        if (textarea) {
+            setTimeout(() => textarea.focus(), 0);
+        }
     };
 
     const toggleList = () => {
