@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Markmap } from 'markmap-view';
 import { Transformer } from 'markmap-lib';
 import * as d3 from 'd3';
+import NodeInputControl from './mind-map/NodeInputControl';
 
 const transformer = new Transformer();
 const GHOST_SYMBOL = '@[[ADD_NEW]]';
@@ -147,15 +148,31 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                             } else if (node.content) {
                                 // 2. Link Handling (Open in new window) & Media Thumbnails
                                 // Inject target="_blank" into existing <a> tags
-                                node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
+                                // 2. Media Handling (Lazy Load)
+                                // Standard Markdown Images
+                                const imgRegex = /!\[(.*?)\]\((.*?)\)/g;
+                                node.content = node.content.replace(imgRegex, (match: string, alt: string, url: string) => {
+                                    return `<div class="media-placeholder-container" style="display:inline-block; border:1px solid #ccc; padding:4px; border-radius:4px; background:rgba(255,255,255,0.1);">
+                                        <div class="media-preview" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+                                            <span style="font-size:20px;">🖼️</span>
+                                            <button class="load-media-btn" data-src="${url}" data-type="image" style="padding:2px 8px; font-size:10px; cursor:pointer; background:#3b82f6; color:white; border:none; border-radius:4px;">Load Image</button>
+                                        </div>
+                                    </div>`;
+                                });
 
-                                // Check for Media URLs in the content to add thumbnails
-                                const mediaMatch = node.content.match(/\.(jpeg|jpg|gif|png|mp4|webm|webp)/i);
-                                if (mediaMatch) {
-                                    // Append a small icon
-                                    const icon = mediaMatch[0].match(/mp4|webm/i) ? '🎥' : '🖼️';
-                                    node.content += ` <span style="font-size: 0.8em; margin-left: 4px;" title="Media Content">${icon}</span>`;
-                                }
+                                // Video Tags (from NodeInputControl)
+                                const videoRegex = /<video[^>]*src=["'](.*?)["'][^>]*>.*?<\/video>/g;
+                                node.content = node.content.replace(videoRegex, (match: string, url: string) => {
+                                    return `<div class="media-placeholder-container" style="display:inline-block; border:1px solid #ccc; padding:4px; border-radius:4px; background:rgba(255,255,255,0.1);">
+                                        <div class="media-preview" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+                                            <span style="font-size:20px;">🎥</span>
+                                            <button class="load-media-btn" data-src="${url}" data-type="video" style="padding:2px 8px; font-size:10px; cursor:pointer; background:#8b5cf6; color:white; border:none; border-radius:4px;">Load Video</button>
+                                        </div>
+                                    </div>`;
+                                });
+
+                                // Link Handling (Target Blank)
+                                node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
 
                                 // 3. Truncation Logic (> 47 chars)
                                 const strippedText = node.content.replace(/<[^>]+>/g, '');
@@ -198,6 +215,27 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     svg.on('click', function (event) {
                         const target = event.target as Element;
 
+                        // MEDIA LOAD BUTTON CLICK
+                        if (target.classList.contains('load-media-btn')) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const btn = target as HTMLElement;
+                            const src = btn.getAttribute('data-src');
+                            const type = btn.getAttribute('data-type');
+                            const container = btn.closest('.media-placeholder-container');
+
+                            if (container && src) {
+                                if (type === 'image') {
+                                    container.innerHTML = `<img src="${src}" style="max-width:200px; max-height:200px; border-radius:4px; display:block;" />`;
+                                } else {
+                                    container.innerHTML = `<div style="width:300px;"><video src="${src}" controls autoplay style="width:100%; border-radius:4px;"></video></div>`;
+                                }
+                                // Trigger update to refit if size changed significantly, though d3 zoom might not auto-adjust
+                                // mmRef.current.fit(); // Optional: might be too jarring
+                            }
+                            return;
+                        }
+
                         // A. Check for Ghost Node Click
                         const ghostPlaceholder = target.closest('.ghost-node-placeholder');
                         if (ghostPlaceholder) {
@@ -221,7 +259,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                         isGhost: true,
                                         payload: dataNode.payload || {},
                                         depth: d?.depth || dataNode.depth || 0,
-                                        mode: 'menu'
+                                        mode: 'input'
                                     });
                                 }
                             }
@@ -293,12 +331,10 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         }
 
                         // C. Background Click
-                        if (editingRef.current?.mode === 'menu') {
-                            setEditing(null);
-                        }
-                        if (editingRef.current?.mode === 'menu') {
-                            setEditing(null);
-                        }
+                        // NodeInputControl handles auto-save on blur, so we don't need to force close editing here
+                        // unless we specifically want to cancel.
+                        // But clicking background IS a "blur" event usually.
+
                         setContextMenu(null);
                         setDownloadMenuOpen(false);
                     });
@@ -391,6 +427,27 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                 } else if (node.content) {
                     // 2. Link Handling (Open in new window) & Media Thumbnails
                     node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
+
+                    // 2. Media Handling (Lazy Load) - SYNCED
+                    const imgRegex = /!\[(.*?)\]\((.*?)\)/g;
+                    node.content = node.content.replace(imgRegex, (match: string, alt: string, url: string) => {
+                        return `<div class="media-placeholder-container" style="display:inline-block; border:1px solid #ccc; padding:4px; border-radius:4px; background:rgba(255,255,255,0.1);">
+                            <div class="media-preview" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+                                <span style="font-size:20px;">🖼️</span>
+                                <button class="load-media-btn" data-src="${url}" data-type="image" style="padding:2px 8px; font-size:10px; cursor:pointer; background:#3b82f6; color:white; border:none; border-radius:4px;">Load Image</button>
+                            </div>
+                        </div>`;
+                    });
+
+                    const videoRegex = /<video[^>]*src=["'](.*?)["'][^>]*>.*?<\/video>/g;
+                    node.content = node.content.replace(videoRegex, (match: string, url: string) => {
+                        return `<div class="media-placeholder-container" style="display:inline-block; border:1px solid #ccc; padding:4px; border-radius:4px; background:rgba(255,255,255,0.1);">
+                            <div class="media-preview" style="display:flex; flex-direction:column; align-items:center; gap:4px;">
+                                <span style="font-size:20px;">🎥</span>
+                                <button class="load-media-btn" data-src="${url}" data-type="video" style="padding:2px 8px; font-size:10px; cursor:pointer; background:#8b5cf6; color:white; border:none; border-radius:4px;">Load Video</button>
+                            </div>
+                        </div>`;
+                    });
 
                     const mediaMatch = node.content.match(/\.(jpeg|jpg|gif|png|mp4|webm|webp)/i);
                     if (mediaMatch) {
@@ -1044,120 +1101,14 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 zIndex: 9999,
                             }}
                         >
-                            {editing.mode === 'menu' ? (
-                                <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 p-1.5 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-700 animate-in fade-in zoom-in-95 duration-200">
-                                    {/* Text Node */}
-                                    <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'text' })}
-                                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
-                                        title="Text"
-                                    >
-                                        <div className="w-5 h-5 flex items-center justify-center font-serif font-bold text-zinc-700 dark:text-zinc-200">T</div>
-                                        <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Text</span>
-                                    </button>
-
-                                    {/* Link Node */}
-                                    <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'link' })}
-                                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
-                                        title="Link"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-500">
-                                            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-                                            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-                                        </svg>
-                                        <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Link</span>
-                                    </button>
-
-                                    {/* Image Node */}
-                                    <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'image' })}
-                                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
-                                        title="Image"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-500">
-                                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                                            <circle cx="8.5" cy="8.5" r="1.5" />
-                                            <polyline points="21 15 16 10 5 21" />
-                                        </svg>
-                                        <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Image</span>
-                                    </button>
-
-                                    {/* Code Node */}
-                                    <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'code' })}
-                                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
-                                        title="Code"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-orange-500">
-                                            <polyline points="16 18 22 12 16 6" />
-                                            <polyline points="8 6 2 12 8 18" />
-                                        </svg>
-                                        <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">Code</span>
-                                    </button>
-
-                                    {/* List/Task Node */}
-                                    <button
-                                        onClick={() => setEditing({ ...editing, mode: 'input', text: '', template: 'task' })}
-                                        className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-lg transition-colors group relative"
-                                        title="Task"
-                                    >
-                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-green-500">
-                                            <line x1="8" y1="6" x2="21" y2="6" />
-                                            <line x1="8" y1="12" x2="21" y2="12" />
-                                            <line x1="8" y1="18" x2="21" y2="18" />
-                                            <line x1="3" y1="6" x2="3.01" y2="6" />
-                                            <line x1="3" y1="12" x2="3.01" y2="12" />
-                                            <line x1="3" y1="18" x2="3.01" y2="18" />
-                                        </svg>
-                                        <span className="absolute -bottom-8 left-1/2 -translate-x-1/2 bg-black text-white text-[10px] px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">List</span>
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="flex items-center gap-1 bg-white dark:bg-zinc-800 p-1 rounded-lg shadow-xl border border-blue-500/30">
-                                    <input
-                                        ref={(input) => {
-                                            if (input) {
-                                                // Handle cursor placement for pre-filled templates
-                                                setTimeout(() => {
-                                                    input.focus();
-                                                }, 10);
-                                            }
-                                        }}
-                                        className="min-w-[200px] w-auto px-3 py-1 bg-transparent text-black dark:text-white outline-none text-sm font-medium"
-                                        value={editing.text}
-                                        placeholder={
-                                            editing.template === 'link' ? "Link Title..." :
-                                                editing.template === 'image' ? "Image Alt Text..." :
-                                                    editing.template === 'code' ? "Code Snippet..." :
-                                                        "Type content..."
-                                        }
-                                        onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-                                        onKeyDown={(e) => {
-                                            if (e.key === 'Enter') handleSave(editing.text);
-                                            // Escape: Revert to ghost if ghost, or cancel edit if regular
-                                            if (e.key === 'Escape') setEditing(null);
-                                        }}
-                                        onBlur={() => {
-                                            // AUTO-SAVE or CANCEL logic
-                                            handleSave(editing.text);
-                                        }}
-                                    />
-                                    {!editing.isGhost && (
-                                        <button
-                                            onClick={() => handleDelete()}
-                                            className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
-                                            title="Delete Node"
-                                        >
-                                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                                <path d="M3 6h18" />
-                                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-                                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-                                            </svg>
-                                        </button>
-                                    )}
-                                </div>
-                            )}
+                            <NodeInputControl
+                                initialValue={editing.text}
+                                nodeId={editing.id}
+                                onSubmit={(val) => {
+                                    handleSave(val);
+                                }}
+                                onCancel={() => setEditing(null)}
+                            />
                         </div>
                     )}
                 </div>

@@ -1,0 +1,397 @@
+'use client';
+
+import React, { useState, useRef, useEffect } from 'react';
+import {
+    Bold, Italic, Underline, Strikethrough, Highlighter,
+    Link as LinkIcon, CheckSquare, Code, List, Table as TableIcon,
+    Image as ImageIcon, Video, X, Check, MonitorPlay, Film,
+    Maximize2, MoreHorizontal, MousePointerClick, Plus
+} from 'lucide-react';
+
+interface NodeInputControlProps {
+    initialValue: string;
+    onSubmit: (value: string) => void;
+    onCancel: () => void;
+    nodeId: string;
+}
+
+type InputMode = 'text' | 'link' | 'list' | 'table' | 'media' | 'code';
+
+export default function NodeInputControl({ initialValue, onSubmit, onCancel }: NodeInputControlProps) {
+    const [value, setValue] = useState(initialValue);
+    const [mode, setMode] = useState<InputMode>('text');
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+    // --- Rich Text Handlers ---
+    const wrapText = (wrapper: string, endWrapper?: string) => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        const text = textarea.value;
+        const selectedText = text.substring(start, end);
+
+        if (!selectedText) return;
+
+        const before = text.substring(0, start);
+        const after = text.substring(end);
+        const ew = endWrapper || wrapper;
+
+        const newValue = `${before}${wrapper}${selectedText}${ew}${after}`;
+        setValue(newValue);
+
+        // Restore selection
+        setTimeout(() => {
+            textarea.focus();
+            textarea.setSelectionRange(start + wrapper.length, end + wrapper.length);
+        }, 0);
+    };
+
+    // --- Sub-Components (Inline for simplicity given scope) ---
+
+    // 1. Link Mode
+    const LinkInput = () => {
+        const [url, setUrl] = useState('');
+        const [text, setText] = useState('');
+
+        return (
+            <div className="flex flex-col gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700">
+                <input
+                    type="text"
+                    placeholder="URL (https://...)"
+                    className="w-full p-1.5 text-sm rounded bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 focus:ring-2 focus:ring-blue-500 outline-none dark:text-white"
+                    value={url}
+                    onChange={e => setUrl(e.target.value)}
+                    autoFocus
+                />
+                <input
+                    type="text"
+                    placeholder="Link Text (Optional)"
+                    className="w-full p-1.5 text-sm rounded bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 focus:ring-2 focus:ring-blue-500 outline-none dark:text-white"
+                    value={text}
+                    onChange={e => setText(e.target.value)}
+                />
+                <div className="flex justify-end gap-2 mt-1">
+                    <button onClick={() => setMode('text')} className="px-3 py-1 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded">Cancel</button>
+                    <button
+                        onClick={() => {
+                            if (!url) return;
+                            const linkMd = `[${text || url}](${url})`;
+                            setValue(prev => prev ? `${prev} ${linkMd}` : linkMd);
+                            setMode('text');
+                        }}
+                        className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                        Add Link
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    // 2. Table Mode
+    const TableInput = () => {
+        const [rows, setRows] = useState(2);
+        const [cols, setCols] = useState(2);
+
+        return (
+            <div className="flex flex-col gap-3 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center gap-4">
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-zinc-500">Rows</label>
+                        <input
+                            type="number" min="1" max="10"
+                            value={rows} onChange={e => setRows(Number(e.target.value))}
+                            className="w-16 p-1 text-sm border rounded bg-white dark:bg-zinc-900 dark:text-white"
+                        />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs font-medium text-zinc-500">Columns</label>
+                        <input
+                            type="number" min="1" max="10"
+                            value={cols} onChange={e => setCols(Number(e.target.value))}
+                            className="w-16 p-1 text-sm border rounded bg-white dark:bg-zinc-900 dark:text-white"
+                        />
+                    </div>
+                </div>
+
+                {/* Mini Preview Grid */}
+                <div className="grid gap-0.5 bg-zinc-300 dark:bg-zinc-600 p-0.5 rounded" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+                    {Array.from({ length: rows * cols }).map((_, i) => (
+                        <div key={i} className="bg-white dark:bg-zinc-800 h-4 w-6 rounded-[1px]" />
+                    ))}
+                </div>
+
+                <div className="flex justify-end gap-2">
+                    <button onClick={() => setMode('text')} className="px-3 py-1 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded">Cancel</button>
+                    <button
+                        onClick={() => {
+                            // Generate Markdown Table
+                            let md = '\n';
+                            // Header
+                            md += `| ${Array(cols).fill('Header').join(' | ')} |\n`;
+                            // Separator
+                            md += `| ${Array(cols).fill('---').join(' | ')} |\n`;
+                            // Rows
+                            for (let i = 0; i < rows; i++) {
+                                md += `| ${Array(cols).fill('Cell').join(' | ')} |\n`;
+                            }
+                            setValue(prev => prev + md);
+                            setMode('text');
+                        }}
+                        className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+                    >
+                        Insert Table
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    // 3. Media Mode
+    const MediaInput = () => {
+        const [activeTab, setActiveTab] = useState<'upload' | 'link'>('upload');
+        const [mediaUrl, setMediaUrl] = useState('');
+        const fileInputRef = useRef<HTMLInputElement>(null);
+
+        const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            // Size validation
+            // Image: 4MB, Video: 15MB
+            const isVideo = file.type.startsWith('video/');
+            const maxSize = isVideo ? 15 * 1024 * 1024 : 4 * 1024 * 1024;
+
+            if (file.size > maxSize) {
+                alert(`File too large. Max ${isVideo ? '15MB' : '4MB'}`);
+                return;
+            }
+
+            // Create Object URL
+            const objUrl = URL.createObjectURL(file);
+            insertMedia(objUrl, isVideo);
+        };
+
+        const insertMedia = (url: string, isVideo: boolean) => {
+            const md = isVideo
+                ? `\n<video controls src="${url}" width="300"></video>`
+                : `![](${url})`; // Standard MD image
+            setValue(prev => prev + md);
+            setMode('text');
+        };
+
+        return (
+            <div className="flex flex-col gap-3 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700">
+                <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-700 pb-2">
+                    <button
+                        onClick={() => setActiveTab('upload')}
+                        className={`text-xs px-2 py-1 rounded ${activeTab === 'upload' ? 'bg-zinc-200 dark:bg-zinc-700 font-medium' : 'text-zinc-500'}`}
+                    >
+                        Upload
+                    </button>
+                    <button
+                        onClick={() => setActiveTab('link')}
+                        className={`text-xs px-2 py-1 rounded ${activeTab === 'link' ? 'bg-zinc-200 dark:bg-zinc-700 font-medium' : 'text-zinc-500'}`}
+                    >
+                        Link
+                    </button>
+                </div>
+
+                {activeTab === 'upload' ? (
+                    <div
+                        className="border-2 border-dashed border-zinc-300 dark:border-zinc-600 rounded p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-700/50 transition-colors"
+                        onClick={() => fileInputRef.current?.click()}
+                    >
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            className="hidden"
+                            accept="image/*,video/*"
+                            onChange={handleFileUpload}
+                        />
+                        <div className="text-zinc-400 mb-1"><Film size={20} /></div>
+                        <span className="text-xs text-zinc-500">Click to upload Image/Video</span>
+                        <span className="text-[10px] text-zinc-400 mt-1">Img &lt;4MB, Vid &lt;15MB</span>
+                    </div>
+                ) : (
+                    <div className="flex flex-col gap-2">
+                        <input
+                            type="text"
+                            placeholder="Media URL"
+                            className="w-full p-1.5 text-sm rounded bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 focus:ring-2 focus:ring-blue-500 outline-none dark:text-white"
+                            value={mediaUrl}
+                            onChange={e => setMediaUrl(e.target.value)}
+                        />
+                        <button
+                            onClick={() => {
+                                if (!mediaUrl) return;
+                                const isVideo = mediaUrl.match(/\.(mp4|webm|mov)$/i);
+                                insertMedia(mediaUrl, !!isVideo);
+                            }}
+                            className="self-end px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+                        >
+                            Add Media
+                        </button>
+                    </div>
+                )}
+
+                <button onClick={() => setMode('text')} onMouseDown={e => e.preventDefault()} className="text-xs text-zinc-500 hover:text-zinc-700 self-start mt-1">Cancel</button>
+            </div>
+        );
+    };
+
+    // 5. Code Mode (Rich Popup)
+    const CodeInput = () => {
+        const [code, setCode] = useState('');
+
+        return (
+            <div className="flex flex-col gap-2 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700 w-[300px]">
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Inline Code</span>
+                    <Code size={14} className="text-zinc-400" />
+                </div>
+                <textarea
+                    className="w-full h-24 p-2 text-sm font-mono bg-zinc-900 text-green-400 rounded border border-zinc-700 outline-none resize-none placeholder-zinc-600"
+                    placeholder="const foo = 'bar';"
+                    value={code}
+                    onChange={e => setCode(e.target.value)}
+                    autoFocus
+                />
+                <div className="flex justify-end gap-2">
+                    <button onClick={() => setMode('text')} className="px-3 py-1 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded">Cancel</button>
+                    <button
+                        onClick={() => {
+                            if (!code.trim()) return;
+                            const newVal = `\`${code}\` `; // Inline code
+                            setValue(prev => prev ? prev + newVal : newVal);
+                            setMode('text');
+                        }}
+                        className="px-3 py-1 text-xs bg-orange-500 text-white rounded hover:bg-orange-600"
+                    >
+                        Insert Code
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    // 4. List Mode (Simplified Popover)
+    const ListInput = () => {
+        return (
+            <div className="grid grid-cols-3 gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700 w-[200px]">
+                {[
+                    { label: 'Bullet', char: '- ' },
+                    { label: 'Number', char: '1. ' },
+                    { label: 'Check', char: '- [ ] ' },
+                    { label: 'Star', char: '* ' },
+                ].map(item => (
+                    <button
+                        key={item.label}
+                        onClick={() => {
+                            setValue(prev => (prev ? prev + '\n' : '') + item.char);
+                            setMode('text');
+                            setTimeout(() => {
+                                textareaRef.current?.focus();
+                            }, 50);
+                        }}
+                        className="text-xs p-2 bg-white dark:bg-zinc-700 hover:bg-blue-50 dark:hover:bg-blue-900/30 border border-zinc-200 dark:border-zinc-600 rounded flex flex-col items-center gap-1"
+                    >
+                        <span className="font-mono">{item.char.trim()}</span>
+                        <span className="text-[10px] text-zinc-500">{item.label}</span>
+                    </button>
+                ))}
+                <button onClick={() => setMode('text')} onMouseDown={e => e.preventDefault()} className="col-span-3 text-xs text-center text-zinc-400 hover:text-zinc-600">Cancel</button>
+            </div>
+        );
+    };
+
+    return (
+        <div className="flex flex-col gap-1 w-[350px] bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden animate-in fade-in zoom-in-95 duration-200 ring-1 ring-zinc-900/5">
+            {/* Top Toolbar: Rich Text */}
+            <div className="flex items-center gap-1 p-1 bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-700/50 overflow-x-auto no-scrollbar">
+                <ToolBtn icon={<Bold size={14} />} onClick={() => wrapText('**')} title="Bold" />
+                <ToolBtn icon={<Italic size={14} />} onClick={() => wrapText('*')} title="Italic" />
+                <ToolBtn icon={<Underline size={14} />} onClick={() => wrapText('<u>', '</u>')} title="Underline" />
+                <ToolBtn icon={<Strikethrough size={14} />} onClick={() => wrapText('~~')} title="Strikethrough" />
+                <div className="w-[1px] h-4 bg-zinc-200 dark:bg-zinc-700 mx-1" />
+                <ToolBtn icon={<Highlighter size={14} />} onClick={() => wrapText('==')} title="Highlight" />
+                <ToolBtn icon={<Code size={14} />} onClick={() => setMode('code')} active={mode === 'code'} title="Inline Code" />
+            </div>
+
+            {/* Main Content Area */}
+            <div className="p-1 relative min-h-[100px] flex flex-col">
+                {mode === 'text' ? (
+                    <textarea
+                        ref={textareaRef}
+                        className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed"
+                        placeholder="Type something..."
+                        value={value}
+                        onChange={e => setValue(e.target.value)}
+                        onKeyDown={e => {
+                            if (e.key === 'Enter' && e.ctrlKey) onSubmit(value);
+                            if (e.key === 'Escape') onCancel();
+                        }}
+                        onBlur={() => onSubmit(value)}
+                        autoFocus
+                    />
+                ) : (
+                    <div className="p-2">
+                        {mode === 'link' && <LinkInput />}
+                        {mode === 'table' && <TableInput />}
+                        {mode === 'media' && <MediaInput />}
+                        {mode === 'list' && <ListInput />}
+                        {mode === 'code' && <CodeInput />}
+                    </div>
+                )}
+            </div>
+
+            {/* Footer Toolbar: Data Types & Actions */}
+            <div className="flex items-center justify-between p-1.5 bg-zinc-50 dark:bg-zinc-800 border-t border-zinc-200 dark:border-zinc-700">
+                <div className="flex items-center gap-1">
+                    <ToolBtn icon={<LinkIcon size={14} />} onClick={() => setMode('link')} active={mode === 'link'} title="Link" />
+                    <ToolBtn icon={<CheckSquare size={14} />} onClick={() => setValue(prev => (prev ? prev + '\n' : '') + '- [ ] ')} title="Checkbox" />
+                    <ToolBtn icon={<List size={14} />} onClick={() => setMode('list')} active={mode === 'list'} title="List" />
+                    <ToolBtn icon={<TableIcon size={14} />} onClick={() => setMode('table')} active={mode === 'table'} title="Table" />
+                    <div className="w-[1px] h-4 bg-zinc-200 dark:bg-zinc-700 mx-1" />
+                    <ToolBtn icon={<ImageIcon size={14} />} onClick={() => setMode('media')} active={mode === 'media'} title="Media" />
+                </div>
+
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={onCancel}
+                        onMouseDown={e => e.preventDefault()}
+                        className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
+                    >
+                        <X size={16} />
+                    </button>
+                    <button
+                        onClick={() => onSubmit(value)}
+                        onMouseDown={e => e.preventDefault()}
+                        className="flex items-center gap-1.5 px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded-md shadow-sm transition-all"
+                    >
+                        <Check size={14} />
+                        Done
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function ToolBtn({ icon, onClick, active, title }: { icon: React.ReactNode, onClick: () => void, active?: boolean, title?: string }) {
+    return (
+        <button
+            onClick={onClick}
+            onMouseDown={(e) => e.preventDefault()} // Prevent focus loss from textarea
+            title={title}
+            className={`p-1.5 rounded-md transition-all ${active
+                ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
+                : 'text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 dark:text-zinc-400'
+                }`}
+        >
+            {icon}
+        </button>
+    );
+}
