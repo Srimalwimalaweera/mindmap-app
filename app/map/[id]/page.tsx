@@ -79,10 +79,10 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
         router.push('/');
     };
 
-    if (loading) return <div className="flex h-screen items-center justify-center bg-gray-50 dark:bg-zinc-900 text-gray-500">Loading...</div>;
+    if (loading) return <div className="flex h-screen items-center justify-center bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)] text-white">Loading...</div>;
 
     return (
-        <div className="flex h-screen flex-col bg-gray-50 dark:bg-zinc-900">
+        <div className="flex h-screen flex-col bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)] text-white">
             <Header
                 user={user}
                 hideTitle={true}

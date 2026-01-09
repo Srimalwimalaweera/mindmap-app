@@ -674,7 +674,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     };
 
     return (
-        <div ref={wrapperRef} className="w-full h-full relative overflow-hidden bg-white dark:bg-zinc-900 group select-none">
+        <div ref={wrapperRef} className="w-full h-full relative overflow-hidden bg-transparent group select-none">
             {/* Visual Mode */}
             {viewMode === 'visual' && (
                 <div className="w-full h-full animate-in fade-in duration-300">
