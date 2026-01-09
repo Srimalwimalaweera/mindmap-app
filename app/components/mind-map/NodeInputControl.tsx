@@ -115,14 +115,52 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
 
     const toggleList = () => {
         if (isTask) setIsTask(false); // Mutually exclusive
+
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+
+        const currentVal = textarea.value; // OR use value state if sync is guaranteed
+        const lines = currentVal.split('\n');
+
+        let newLines = [...lines];
+        let newType: 'bullet' | 'ordered' = 'bullet';
+
         if (isList) {
             // Cycle: Bullet -> Ordered -> Off
-            if (listType === 'bullet') setListType('ordered');
-            else setIsList(false);
+            if (listType === 'bullet') {
+                // Change to Ordered
+                newType = 'ordered';
+                setListType('ordered');
+                // Replace "- " with "1. ", "2. ", etc.
+                newLines = lines.map((line, i) => {
+                    return line.replace(/^-\s/, `${i + 1}. `);
+                });
+            } else {
+                // Turn Off
+                setIsList(false);
+                // Strip all markers
+                newLines = lines.map(line => {
+                    // Match start of line: whitespace, marker (- * + 1. 1)), whitespace
+                    return line.replace(/^(\s*)([-*+]|\d+[\.\)])\s+/, '$1');
+                });
+            }
         } else {
+            // Turn On (Bullet default)
             setIsList(true);
             setListType('bullet');
+            // Add "- " to all lines that don't have it?
+            newLines = lines.map(line => {
+                // If already has marker, keep it
+                if (line.match(/^(\s*)([-*+]|\d+[\.\)])\s+/)) return line;
+                return `- ${line}`;
+            });
         }
+
+        const newValue = newLines.join('\n');
+        setValue(newValue);
+
+        // Focus back
+        setTimeout(() => textarea.focus(), 0);
     };
 
     // --- Rich Text Handlers ---
@@ -436,8 +474,8 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
             const lineEnd = text.indexOf('\n', start);
             const currentLine = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
 
-            // Matches: "- ", "* ", "1. ", "10. "
-            const listRegex = /^(\s*)(-[ ]|\d+\.[ ])/;
+            // Matches: "- ", "* ", "+ ", "1. ", "1) " with any whitespace
+            const listRegex = /^(\s*)([-*+]|\d+[\.\)])\s+/;
             const match = currentLine.match(listRegex);
 
             if (match) {
@@ -450,9 +488,6 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
                     // Remove the empty marker on current line
                     const newValue = text.substring(0, lineStart) + text.substring(lineEnd === -1 ? text.length : lineEnd + 1);
                     setValue(newValue);
-
-                    // Toggle list off if we were tracking it, but primarily we depend on text now.
-                    // This is "soft exit"
                     return;
                 }
 
@@ -461,10 +496,14 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
                 // Determine next marker
                 let nextMarker = marker;
                 // Auto-increment number
-                const numMatch = marker.match(/^(\s*)(\d+)(\.\s)/);
+                // Capture: indent, number, separator (dot or paren)
+                const numMatch = marker.match(/^(\s*)(\d+)([\.\)])(\s+)/);
                 if (numMatch) {
+                    const indent = numMatch[1];
                     const num = parseInt(numMatch[2], 10);
-                    nextMarker = `${numMatch[1]}${num + 1}${numMatch[3]}`;
+                    const sep = numMatch[3]; // . or )
+                    const trailingSpace = numMatch[4];
+                    nextMarker = `${indent}${num + 1}${sep}${trailingSpace}`;
                 }
 
                 // Insert "\n" + nextMarker
@@ -542,25 +581,13 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
                                 />
                             </div>
                         )}
-                        {isList && (
-                            <div className="pt-2.5 pl-3 pr-1 select-none">
-                                {listType === 'ordered' ? (
-                                    <span className="font-mono text-zinc-500 text-sm font-semibold">1.</span>
-                                ) : (
-                                    <span className="text-zinc-900 dark:text-zinc-100 text-xl leading-none">•</span>
-                                )}
-                            </div>
-                        )}
                         <textarea
                             ref={textareaRef}
                             className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed flex-1"
                             placeholder={isTask ? "Task description..." : (isList ? "List item..." : "Type something...")}
                             value={value}
                             onChange={e => setValue(e.target.value)}
-                            onKeyDown={e => {
-                                if (e.key === 'Enter' && e.ctrlKey) handleSubmit(value);
-                                if (e.key === 'Escape') onCancel();
-                            }}
+                            onKeyDown={handleKeyDown}
                             onBlur={() => { /* Wait for explicit Done */ }}
                             autoFocus
                         />
