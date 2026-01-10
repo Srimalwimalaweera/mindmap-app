@@ -252,8 +252,22 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                 setTimeLeft(count);
                 if (count <= 0) {
                     clearInterval(timer);
-                    const msg = `Hi, I want to upgrade to ${selectedPlan} plan (User ID: ${user.uid}). Here is my payment slip.`;
-                    window.open(`https://wa.me/94761779019?text=${encodeURIComponent(msg)}`, '_blank');
+                    const dateStr = new Date().toLocaleString();
+                    const msg = `Hi,
+Mr. Diluu.... I'm from Visual Mind Map App.
+
+I've purchased ${selectedPlan} plan
+I've paid LKR ${settings.plans[selectedPlan]}
+here's I attached slip.
+
+Email :- ${user.email}
+Name :- ${user.displayName || 'User'}
+user id :- ${user.uid}
+
+paid date :- ${dateStr}
+
+Thank you!.`;
+                    window.location.href = `https://wa.me/94761779019?text=${encodeURIComponent(msg)}`;
                     onClose();
                 }
             }, 1000);
@@ -419,8 +433,22 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                 setTimeLeft(count);
                 if (count <= 0) {
                     clearInterval(timer);
-                    const msg = `Hi, I want to buy ${selectedItem.label} (${selectedItem.type}) (User ID: ${user.uid}). Here is my payment slip.`;
-                    window.open(`https://wa.me/94761779019?text=${encodeURIComponent(msg)}`, '_blank');
+                    const dateStr = new Date().toLocaleString();
+                    const msg = `Hi,
+Mr. Diluu.... I'm from Visual Mind Map App.
+
+I've purchased ${selectedItem.label} (${selectedItem.type})
+I've paid LKR ${selectedItem.price}
+here's I attached slip.
+
+Email :- ${user.email}
+Name :- ${user.displayName || 'User'}
+user id :- ${user.uid}
+
+paid date :- ${dateStr}
+
+Thank you!.`;
+                    window.location.href = `https://wa.me/94761779019?text=${encodeURIComponent(msg)}`;
                     onClose();
                 }
             }, 1000);
