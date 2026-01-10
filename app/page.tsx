@@ -14,7 +14,7 @@ import {
   permanentDeleteMindMap,
   emptyTrash
 } from './services/mindmapService';
-import { createBook, getBooks, BookData } from './services/bookService';
+import { createBook, getBooks, updateBook, softDeleteBook, restoreBook, permanentDeleteBook, BookData } from './services/bookService';
 import Image from 'next/image';
 
 import LandingPage from './components/LandingPage';
@@ -190,7 +190,7 @@ export default function Dashboard() {
     }
   };
 
-  const handlePin = async (e: React.MouseEvent, map: MindMapData) => {
+  const handlePin = async (e: React.MouseEvent, map: MindMapData | BookData) => {
     e.stopPropagation();
     if (!user) return;
     const newStatus = !map.isPinned;
@@ -211,7 +211,12 @@ export default function Dashboard() {
 
     // Optimistic update
     setMaps(maps.map(m => m.id === map.id ? { ...m, isPinned: newStatus } : m));
-    await togglePinMindMap(map.id, newStatus);
+
+    if (map.type === 'book') {
+      await updateBook(map.id, { isPinned: newStatus });
+    } else {
+      await togglePinMindMap(map.id, newStatus);
+    }
   };
 
   const requestConfirmation = (title: string, message: string, actionLabel: string, action: () => Promise<void>, isDangerous = false) => {
@@ -238,7 +243,11 @@ export default function Dashboard() {
       "Move to Trash",
       async () => {
         setMaps(prev => prev.map(m => m.id === map.id ? { ...m, isTrashed: true, trashedAt: new Date().toISOString() } : m));
-        await softDeleteMindMap(map.id);
+        if (map.type === 'book') {
+          await softDeleteBook(map.id);
+        } else {
+          await softDeleteMindMap(map.id);
+        }
       },
       true
     );
@@ -247,7 +256,11 @@ export default function Dashboard() {
   const handleRestore = async (map: MindMapData) => {
     if (!user) return;
     setMaps(maps.map(m => m.id === map.id ? { ...m, isTrashed: false, trashedAt: undefined } : m));
-    await restoreMindMap(map.id);
+    if (map.type === 'book') {
+      await restoreBook(map.id);
+    } else {
+      await restoreMindMap(map.id);
+    }
   };
 
   const handlePermanentDelete = async (map: MindMapData) => {
@@ -258,7 +271,11 @@ export default function Dashboard() {
       "Delete Permanently",
       async () => {
         setMaps(prev => prev.filter(m => m.id !== map.id));
-        await permanentDeleteMindMap(map.id);
+        if (map.type === 'book') {
+          await permanentDeleteBook(user.uid, map.id);
+        } else {
+          await permanentDeleteMindMap(map.id);
+        }
       },
       true
     );

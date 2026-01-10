@@ -74,5 +74,22 @@ export const loadBookPages = async (uid: string, bookId: string): Promise<any[]>
 };
 
 export const softDeleteBook = async (bookId: string) => {
-    await updateBook(bookId, { isTrashed: true });
-}
+    await updateBook(bookId, { isTrashed: true, trashedAt: new Date().toISOString() });
+};
+
+export const restoreBook = async (bookId: string) => {
+    await updateBook(bookId, { isTrashed: false, trashedAt: undefined });
+};
+
+export const permanentDeleteBook = async (userId: string, bookId: string) => {
+    const docRef = doc(db, COLLECTION_NAME, bookId);
+    await deleteDoc(docRef);
+
+    // Try delete storage
+    try {
+        const storageRef = ref(storage, `books/${userId}/${bookId}.json`);
+        await deleteObject(storageRef);
+    } catch (e) {
+        console.warn("Storage file not found or already deleted", e);
+    }
+};
