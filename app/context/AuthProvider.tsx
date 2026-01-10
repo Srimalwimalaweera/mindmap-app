@@ -54,6 +54,7 @@ export interface AppSettings {
         accountNumber: string;
         accountHolder: string;
     };
+    maintenanceMode: boolean;
 }
 
 interface AuthContextType {
@@ -110,6 +111,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
             const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins'));
             const bankDoc = await getDoc(doc(db, 'settings', 'bank_details'));
+            const systemDoc = await getDoc(doc(db, 'settings', 'system'));
 
             // Helper to format Duration
             const fmtDuration = (sec: number) => {
@@ -148,7 +150,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     branch: bankDoc.data()?.banch || '',
                     accountNumber: bankDoc.data()?.account_number || '',
                     accountHolder: bankDoc.data()?.account_holder_name || ''
-                }
+                },
+                maintenanceMode: systemDoc.exists() ? systemDoc.data()?.maintenanceMode || false : false
             };
 
             // Parse Auto/Save Times

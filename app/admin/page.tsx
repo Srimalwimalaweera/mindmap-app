@@ -5,8 +5,8 @@ import { useAuth } from '../context/AuthProvider';
 import { useRouter } from 'next/navigation';
 import { db } from '@/lib/firebase';
 import { approvePayment, getPayments, rejectPayment } from '../services/paymentService';
-import { Loader2, Check, X, ShieldAlert, History, Star, Briefcase, Shield, ArrowLeft } from 'lucide-react';
-import { getDoc, setDoc, doc } from 'firebase/firestore';
+import { Loader2, Check, X, ShieldAlert, History, Star, Briefcase, Shield, ArrowLeft, RefreshCw, AlertTriangle, ToggleLeft, ToggleRight, LayoutDashboard, Users, HardDrive } from 'lucide-react';
+import { getDoc, setDoc, doc, getCountFromServer, collection } from 'firebase/firestore';
 
 // Helper for Relative Time
 function timeAgo(date: number) {
@@ -17,6 +17,94 @@ function timeAgo(date: number) {
     const hours = Math.floor(minutes / 60);
     if (hours < 24) return `${hours}h ago`;
     return `${Math.floor(hours / 24)}d ago`;
+}
+
+// --- Usage Viewer Component ---
+function UsageViewer() {
+    const [counts, setCounts] = useState({ users: 0, maps: 0 });
+    const [loading, setLoading] = useState(false);
+
+    const fetchCounts = async () => {
+        setLoading(true);
+        try {
+            const userColl = collection(db, 'users');
+            const mapColl = collection(db, 'markmaps');
+
+            const userSnap = await getCountFromServer(userColl);
+            const mapSnap = await getCountFromServer(mapColl);
+
+            setCounts({
+                users: userSnap.data().count,
+                maps: mapSnap.data().count
+            });
+        } catch (e) {
+            console.error("Error fetching counts", e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchCounts();
+    }, []);
+
+    return (
+        <div className="space-y-6">
+            <div className="flex justify-between items-center mb-6">
+                <h2 className="text-xl font-bold dark:text-white flex items-center gap-2">
+                    <LayoutDashboard className="text-blue-500" /> System Usage
+                </h2>
+                <button
+                    onClick={fetchCounts}
+                    disabled={loading}
+                    className="flex items-center gap-2 bg-zinc-800 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+                >
+                    <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+                    Refresh Stats
+                </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Users Card */}
+                <div className="bg-gradient-to-br from-blue-500 to-blue-700 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                        <Users size={100} />
+                    </div>
+                    <div className="relative z-10">
+                        <p className="text-blue-100 text-sm font-bold uppercase tracking-wider mb-2">Total Users</p>
+                        <h3 className="text-5xl font-black">{loading ? '...' : counts.users}</h3>
+                        <p className="text-blue-200 text-xs mt-4">Registered accounts in database</p>
+                    </div>
+                </div>
+
+                {/* Maps Card */}
+                <div className="bg-gradient-to-br from-purple-500 to-purple-700 text-white p-6 rounded-2xl shadow-lg relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                        <HardDrive size={100} />
+                    </div>
+                    <div className="relative z-10">
+                        <p className="text-purple-100 text-sm font-bold uppercase tracking-wider mb-2">Total Mind Maps</p>
+                        <h3 className="text-5xl font-black">{loading ? '...' : counts.maps}</h3>
+                        <p className="text-purple-200 text-xs mt-4">Projects stored in database</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="bg-yellow-50 dark:bg-yellow-900/10 border border-yellow-200 dark:border-yellow-800 rounded-xl p-6 mt-8">
+                <div className="flex items-start gap-4">
+                    <AlertTriangle className="text-yellow-600 dark:text-yellow-500 shrink-0 mt-1" />
+                    <div>
+                        <h4 className="font-bold text-yellow-800 dark:text-yellow-400 mb-2">Usage Note (Blaze Plan)</h4>
+                        <p className="text-sm text-yellow-700 dark:text-yellow-500/80 leading-relaxed">
+                            Firebase usage is billed based on document reads, writes, and storage.
+                            These counts represent the total number of documents.
+                            To control costs, use the <strong>Limit Users</strong> toggle in Settings to restrict new project creation during high traffic.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 }
 
 // --- Settings Editor Component ---
@@ -35,7 +123,8 @@ function SettingsEditor() {
                 limits: await getDoc(doc(db, 'settings', 'default_project_limit')),
                 bank: await getDoc(doc(db, 'settings', 'bank_details')),
                 addSlots: await getDoc(doc(db, 'settings', 'additional_project_items')),
-                addPins: await getDoc(doc(db, 'settings', 'additional_project_pins'))
+                addPins: await getDoc(doc(db, 'settings', 'additional_project_pins')),
+                system: await getDoc(doc(db, 'settings', 'system')) // Fetch system settings
             };
             setConfig({
                 plans: docs.plans.data() || {},
@@ -43,7 +132,8 @@ function SettingsEditor() {
                 limits: docs.limits.data() || {},
                 bank: docs.bank.data() || {},
                 addSlots: docs.addSlots.data() || {},
-                addPins: docs.addPins.data() || {}
+                addPins: docs.addPins.data() || {},
+                system: docs.system.data() || { maintenanceMode: false }
             });
         } catch (e) {
             console.error(e);
@@ -68,6 +158,7 @@ function SettingsEditor() {
             if (section === 'bank') docId = 'bank_details';
             if (section === 'addSlots') docId = 'additional_project_items';
             if (section === 'addPins') docId = 'additional_project_pins';
+            if (section === 'system') docId = 'system';
 
             // For dynamic lists (addSlots/addPins), we overwrite to support deletion. For others, merge is fine/safer.
             const overwrite = section === 'addSlots' || section === 'addPins';
@@ -247,6 +338,29 @@ function SettingsEditor() {
                 </div>
             </div>
 
+            {/* System Controls */}
+            <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><ToggleLeft size={16} /> Usage Controls</h3>
+                <div className="flex items-center justify-between bg-white dark:bg-zinc-800 p-4 rounded-lg border border-zinc-200 dark:border-zinc-600">
+                    <div>
+                        <div className="font-bold dark:text-white">Limit Users (Maintenance Mode)</div>
+                        <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">If enabled, limits new actions to reduce costs.</div>
+                    </div>
+                    <button
+                        onClick={() => {
+                            const newValue = !config.system.maintenanceMode;
+                            setConfig({ ...config, system: { ...config.system, maintenanceMode: newValue } });
+                        }}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${config.system.maintenanceMode ? 'bg-red-500' : 'bg-zinc-200 dark:bg-zinc-600'}`}
+                    >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${config.system.maintenanceMode ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </button>
+                    <button onClick={() => handleSave('system', config.system)} className="ml-4 bg-zinc-800 text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">
+                        Update
+                    </button>
+                </div>
+            </div>
+
             {/* Bank Details */}
             <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
                 <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><History size={16} /> Bank Details</h3>
@@ -372,12 +486,12 @@ export default function AdminPage() {
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-4 mb-6 border-b border-zinc-200 dark:border-zinc-700">
-                    {['pending', 'approved', 'rejected', 'settings'].map((tab: any) => (
+                <div className="flex gap-4 mb-6 border-b border-zinc-200 dark:border-zinc-700 overflow-x-auto">
+                    {['pending', 'approved', 'rejected', 'settings', 'usage'].map((tab: any) => (
                         <button
                             key={tab}
                             onClick={() => setActiveTab(tab)}
-                            className={`pb-3 px-4 text-sm font-medium capitalize transition-all ${activeTab === tab
+                            className={`pb-3 px-4 text-sm font-medium capitalize transition-all whitespace-nowrap ${activeTab === tab
                                 ? 'border-b-2 border-blue-500 text-blue-600 dark:text-blue-400'
                                 : 'text-zinc-500 hover:text-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-200'
                                 }`}
@@ -391,6 +505,8 @@ export default function AdminPage() {
                 <div className="bg-white dark:bg-zinc-800 rounded-xl shadow border border-zinc-200 dark:border-zinc-700 p-6">
                     {activeTab === 'settings' ? (
                         <SettingsEditor />
+                    ) : activeTab === 'usage' ? (
+                        <UsageViewer />
                     ) : (
                         <div className="overflow-x-auto">
                             {fetching ? (

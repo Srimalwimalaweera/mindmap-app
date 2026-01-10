@@ -22,7 +22,8 @@ export default function AboutPage() {
                             src="https://firebasestorage.googleapis.com/v0/b/visual-markmap-studio.firebasestorage.app/o/app_images%2Fabout_page%2F463489416_1072771157562320_3683418608164601466_n.jpg?alt=media&token=3b1f2228-3011-482a-8215-3e6348e83d63"
                             alt="Dilum Srimal Wimalaweera"
                             fill
-                            className="object-cover rounded-full"
+                            className="object-cover rounded-full pointer-events-none"
+                            onContextMenu={(e) => e.preventDefault()}
                         />
                     </div>
 
