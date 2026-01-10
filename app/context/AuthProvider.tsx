@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { auth, db, googleProvider } from '@/lib/firebase';
 import { onAuthStateChanged, User, signOut as firebaseSignOut } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
@@ -41,9 +41,15 @@ export interface AppSettings {
         pro: number;
         ultra: number;
     };
-    autoSaveOptions: number[]; // Array of allowed seconds e.g. [30, 60, ... 1800]
+    autoSaveOptions: { label: string; value: number; minPlan: 'free' | 'pro' | 'ultra' }[];
     additionalProjectSlots: { label: string; price: number; slots: number }[];
     additionalPinSlots: { label: string; price: number; slots: number }[];
+    bankDetails: {
+        bankName: string;
+        branch: string;
+        accountNumber: string;
+        accountHolder: string;
+    };
 }
 
 interface AuthContextType {
@@ -53,6 +59,7 @@ interface AuthContextType {
     loading: boolean;
     logout: () => Promise<void>;
     refreshUserData: () => Promise<void>;
+    refreshSettings: () => Promise<void>; // Added for manual refresh
     updateAutoSaveInterval: (ms: number) => Promise<void>;
 }
 
@@ -63,6 +70,7 @@ const AuthContext = createContext<AuthContextType>({
     loading: true,
     logout: async () => { },
     refreshUserData: async () => { },
+    refreshSettings: async () => { },
     updateAutoSaveInterval: async () => { }
 });
 
@@ -75,79 +83,118 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const [loading, setLoading] = useState(true);
 
     // 1. Fetch System Settings (Run once)
-    useEffect(() => {
-        const fetchSettings = async () => {
-            try {
-                // We'll fetch the individual documents from 'settings' collection
-                // Structure assumed based on user request:
-                // settings/plans
-                // settings/pin_settings
-                // settings/default_project_limit
-                // settings/auto_saving_times (Wait, user said fields are 1:30, 2:60. We'll convert vals to array)
-                // settings/additional_project_items 
-                // settings/additional_project_pins (guessing name based on pattern)
-
-                const plansDoc = await getDoc(doc(db, 'settings', 'plans'));
-                const pinsDoc = await getDoc(doc(db, 'settings', 'pin_settings'));
-                const limitsDoc = await getDoc(doc(db, 'settings', 'default_project_limit'));
-                const autoSaveDoc = await getDoc(doc(db, 'settings', 'auto_saving_times'));
-
-                // Additional Items (Might be in subcollections or just fields, assuming fields based on screenshot "10 slots: 200")
-                const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
-                // const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins')); // Assuming existing or empty
-
-                const parsedSettings: AppSettings = {
-                    plans: {
-                        free: plansDoc.data()?.free ?? 0,
-                        pro: plansDoc.data()?.pro ?? 900,
-                        ultra: plansDoc.data()?.ultra ?? 1650,
-                    },
-                    pinLimits: {
-                        free: pinsDoc.data()?.free ?? 5,
-                        pro: pinsDoc.data()?.pro ?? 10,
-                        ultra: pinsDoc.data()?.ultra ?? 9999, // 0 usually means unlimited, we'll implement logic
-                    },
-                    projectLimits: {
-                        free: limitsDoc.data()?.free ?? 10,
-                        pro: limitsDoc.data()?.pro ?? 20,
-                        ultra: limitsDoc.data()?.ultra ?? 50,
-                    },
-                    autoSaveOptions: [],
-                    additionalProjectSlots: [],
-                    additionalPinSlots: [],
-                };
-
-                // Parse Auto/Save Times
-                if (autoSaveDoc.exists()) {
-                    // Fields are "1": 30, "2": 60... map values to array
-                    const times = Object.values(autoSaveDoc.data()).map(v => Number(v)).sort((a, b) => a - b);
-                    parsedSettings.autoSaveOptions = times;
+    const fetchSettings = useCallback(async (force: boolean = false) => {
+        try {
+            // Check Cache (24 hours) - Skip if forced
+            if (!force) {
+                const cached = localStorage.getItem('appSettings');
+                const cacheTime = localStorage.getItem('appSettingsTime');
+                if (cached && cacheTime) {
+                    const age = Date.now() - parseInt(cacheTime);
+                    if (age < 24 * 60 * 60 * 1000) {
+                        setSettings(JSON.parse(cached));
+                        return;
+                    }
                 }
-
-                // Parse Add Project Slots
-                if (addProjDoc.exists()) {
-                    // "10 slots": 200
-                    // We need to parse "10 slots" to get 10.
-                    Object.entries(addProjDoc.data()).forEach(([key, price]) => {
-                        const match = key.match(/(\d+)\s+slots/i);
-                        if (match) {
-                            parsedSettings.additionalProjectSlots.push({
-                                label: key,
-                                slots: parseInt(match[1]),
-                                price: Number(price)
-                            });
-                        }
-                    });
-                }
-
-                setSettings(parsedSettings);
-            } catch (err) {
-                console.error("Failed to load settings:", err);
             }
-        };
 
-        fetchSettings();
+            const plansDoc = await getDoc(doc(db, 'settings', 'plans'));
+            const pinsDoc = await getDoc(doc(db, 'settings', 'pin_settings'));
+            const limitsDoc = await getDoc(doc(db, 'settings', 'default_project_limit'));
+            const autoSaveDoc = await getDoc(doc(db, 'settings', 'auto_saving_times'));
+
+            const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
+            const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins'));
+            const bankDoc = await getDoc(doc(db, 'settings', 'bank_details'));
+
+            // Helper to format Duration
+            const fmtDuration = (sec: number) => {
+                if (sec < 60) return `${sec} sec`;
+                return `${Math.floor(sec / 60)} min`;
+            };
+
+            // Helper to map plan for autosave
+            const getMinPlan = (sec: number): 'free' | 'pro' | 'ultra' => {
+                if (sec >= 1200) return 'free'; // 20m+
+                if (sec >= 300) return 'pro';   // 5m+
+                return 'ultra';                 // <5m
+            };
+
+            const parsedSettings: AppSettings = {
+                plans: {
+                    free: plansDoc.data()?.free ?? 0,
+                    pro: plansDoc.data()?.pro ?? 900,
+                    ultra: plansDoc.data()?.ultra ?? 1650,
+                },
+                pinLimits: {
+                    free: pinsDoc.data()?.free ?? 5,
+                    pro: pinsDoc.data()?.pro ?? 10,
+                    ultra: pinsDoc.data()?.ultra ?? 9999,
+                },
+                projectLimits: {
+                    free: limitsDoc.data()?.free ?? 10,
+                    pro: limitsDoc.data()?.pro ?? 20,
+                    ultra: limitsDoc.data()?.ultra ?? 50,
+                },
+                autoSaveOptions: [],
+                additionalProjectSlots: [],
+                additionalPinSlots: [],
+                bankDetails: {
+                    bankName: bankDoc.data()?.bank_name || '',
+                    branch: bankDoc.data()?.banch || '',
+                    accountNumber: bankDoc.data()?.account_number || '',
+                    accountHolder: bankDoc.data()?.account_holder_name || ''
+                }
+            };
+
+            // Parse Auto/Save Times
+            if (autoSaveDoc.exists()) {
+                const values = Object.values(autoSaveDoc.data()).map(v => Number(v)).sort((a, b) => a - b);
+                parsedSettings.autoSaveOptions = values.map(val => ({
+                    label: fmtDuration(val),
+                    value: val * 1000,
+                    minPlan: getMinPlan(val)
+                }));
+            }
+
+            // Parse Add Project Slots
+            if (addProjDoc.exists()) {
+                Object.entries(addProjDoc.data()).forEach(([key, price]) => {
+                    const match = key.match(/(\d+)\s+slots/i);
+                    const slots = match ? parseInt(match[1]) : 0;
+                    parsedSettings.additionalProjectSlots.push({
+                        label: key.replace(/_/g, ' '),
+                        price: Number(price),
+                        slots: slots
+                    });
+                });
+            }
+            // Parse Add Pin Slots
+            if (addPinsDoc.exists()) {
+                Object.entries(addPinsDoc.data()).forEach(([key, price]) => {
+                    const match = key.match(/(\d+)\s+pins/i);
+                    const slots = match ? parseInt(match[1]) : 0;
+                    parsedSettings.additionalPinSlots.push({
+                        label: key.replace(/_/g, ' '),
+                        price: Number(price),
+                        slots: slots
+                    });
+                });
+            }
+
+            setSettings(parsedSettings);
+            // Cache It
+            localStorage.setItem('appSettings', JSON.stringify(parsedSettings));
+            localStorage.setItem('appSettingsTime', Date.now().toString());
+
+        } catch (err) {
+            console.error("Failed to load settings:", err);
+        }
     }, []);
+
+    useEffect(() => {
+        fetchSettings();
+    }, [fetchSettings]);
 
 
     // 2. Auth State & User Data
@@ -234,9 +281,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
     };
 
+    const value = {
+        user,
+        userData,
+        settings,
+        loading,
+        logout,
+        refreshUserData,
+        refreshSettings: () => fetchSettings(true), // Expose fetcher with force=true
+        updateAutoSaveInterval
+    };
+
     return (
-        <AuthContext.Provider value={{ user, userData, settings, loading, logout, refreshUserData, updateAutoSaveInterval }}>
-            {children}
+        <AuthContext.Provider value={value}>
+            {!loading && children}
         </AuthContext.Provider>
     );
 }

@@ -180,109 +180,205 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
 
 
 // 2. Upgrade Modal
+// 2. Upgrade Modal
 export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-    const { settings, userData } = useAuth();
+    const { settings, userData, refreshSettings } = useAuth();
+
+    useEffect(() => {
+        if (isOpen) {
+            refreshSettings?.();
+        }
+    }, [isOpen, refreshSettings]);
+
     if (!settings || !userData) return null;
 
     const plans: PlanType[] = ['pro', 'ultra'];
+    const [selectedPlan, setSelectedPlan] = useState<PlanType | null>(null);
 
     return (
         <Modal title="Upgrade Plan" isOpen={isOpen} onClose={onClose}>
-            <div className="mb-4 text-center">
-                <p className="text-sm text-zinc-500">Current Plan</p>
-                <div className="inline-block px-3 py-1 mt-1 font-bold text-white bg-zinc-500 rounded-full capitalize text-sm">
-                    {userData.plan}
-                </div>
-            </div>
-
-            <div className="space-y-3">
-                {plans.map(plan => (
-                    <div key={plan} className={`p-4 rounded-xl border-2 flex justify-between items-center cursor-pointer transition-all ${userData.plan === plan ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-zinc-200 dark:border-zinc-600 hover:border-blue-400'
-                        }`}>
-                        <div>
-                            <h4 className="font-bold text-lg capitalize flex items-center gap-2 dark:text-white">
-                                {plan}
-                                {userData.plan === plan && <Check size={16} className="text-green-500" />}
-                            </h4>
-                            <div className="text-xs text-zinc-500 mt-1">
-                                {plan === 'pro' && 'More limits, more pins.'}
-                                {plan === 'ultra' && 'Unlimited power.'}
-                            </div>
-                        </div>
-                        <div className="text-right">
-                            <div className="text-xl font-bold text-blue-600 dark:text-blue-400">LKR {settings.plans[plan]}</div>
-                            {userData.plan !== plan && (
-                                <button className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full mt-1 hover:bg-blue-700">
-                                    Upgrade
-                                </button>
-                            )}
+            {!selectedPlan ? (
+                <>
+                    <div className="mb-4 text-center">
+                        <p className="text-sm text-zinc-500">Current Plan</p>
+                        <div className="inline-block px-3 py-1 mt-1 font-bold text-white bg-zinc-500 rounded-full capitalize text-sm">
+                            {userData.plan}
                         </div>
                     </div>
-                ))}
-            </div>
+
+                    <div className="space-y-3">
+                        {plans.map(plan => (
+                            <div key={plan} className={`p-4 rounded-xl border-2 flex justify-between items-center cursor-pointer transition-all ${userData.plan === plan ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-zinc-200 dark:border-zinc-600 hover:border-blue-400'
+                                }`}>
+                                <div>
+                                    <h4 className="font-bold text-lg capitalize flex items-center gap-2 dark:text-white">
+                                        {plan}
+                                        {userData.plan === plan && <Check size={16} className="text-green-500" />}
+                                    </h4>
+                                    <div className="text-xs text-zinc-500 mt-1">
+                                        {plan === 'pro' && 'More limits, more pins.'}
+                                        {plan === 'ultra' && 'Unlimited power.'}
+                                    </div>
+                                </div>
+                                <div className="text-right">
+                                    <div className="text-xl font-bold text-blue-600 dark:text-blue-400">LKR {settings.plans[plan]}</div>
+                                    {userData.plan !== plan && (
+                                        <button
+                                            onClick={() => setSelectedPlan(plan)}
+                                            className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full mt-1 hover:bg-blue-700"
+                                        >
+                                            Upgrade
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </>
+            ) : (
+                <div className="animate-in slide-in-from-right duration-200">
+                    <button onClick={() => setSelectedPlan(null)} className="text-xs text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">
+                        ← Back to plans
+                    </button>
+
+                    <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-600 mb-4">
+                        <h4 className="font-bold text-lg mb-2 dark:text-white capitalize">Upgrade to {selectedPlan}</h4>
+                        <div className="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-4">LKR {settings.plans[selectedPlan]}</div>
+
+                        <div className="text-sm text-zinc-600 dark:text-zinc-300 space-y-2 mb-4">
+                            <p>To initialize the upgrade, please deposit the amount to the following bank account:</p>
+                        </div>
+
+                        <div className="bg-white dark:bg-zinc-800 p-3 rounded border border-zinc-200 dark:border-zinc-600 text-sm space-y-1">
+                            <div className="flex justify-between"><span className="text-zinc-500">Bank:</span> <span className="font-bold dark:text-white">{settings.bankDetails.bankName}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Branch:</span> <span className="font-bold dark:text-white">{settings.bankDetails.branch}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Acc No:</span> <span className="font-bold dark:text-white tracking-widest">{settings.bankDetails.accountNumber}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Name:</span> <span className="font-bold dark:text-white">{settings.bankDetails.accountHolder}</span></div>
+                        </div>
+                    </div>
+
+                    <a
+                        href={`https://wa.me/94761779019?text=Hi, I want to upgrade to ${selectedPlan} plan (User ID: ${userData.uid}). Here is my payment slip.`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg hover:shadow-xl active:scale-95"
+                    >
+                        <span>Send Slip via WhatsApp</span>
+                    </a>
+                    <p className="text-center text-xs text-zinc-400 mt-2">Send a photo of your deposit slip/transfer receipt.</p>
+                </div>
+            )}
         </Modal>
     );
 }
 
 // 3. Buy Slots Modal
 export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-    const { settings } = useAuth();
-    if (!settings) return null;
+    const { settings, userData, refreshSettings } = useAuth();
+    const [selectedItem, setSelectedItem] = useState<{ label: string, price: number, type: 'slots' | 'pins' } | null>(null);
+
+    useEffect(() => {
+        if (isOpen) {
+            refreshSettings?.();
+        }
+    }, [isOpen, refreshSettings]);
+
+    if (!settings || !userData) return null;
 
     return (
-        <Modal title="Buy Extra Slots" isOpen={isOpen} onClose={onClose}>
-            <div className="space-y-4">
-                <div className="text-sm text-zinc-500 mb-2">Purchase additional project capacity or pins.</div>
+        <Modal title={selectedItem ? "Confirm Purchase" : "Buy Extra Resources"} isOpen={isOpen} onClose={onClose}>
+            {!selectedItem ? (
+                <div className="space-y-4">
+                    <div className="text-sm text-zinc-500 mb-2">Purchase additional project capacity or pins.</div>
 
-                {/* Project Slots */}
-                {settings.additionalProjectSlots.map((item, i) => (
-                    <div key={i} className="flex justify-between items-center p-3 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:border-purple-500 transition-colors">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-purple-100 text-purple-600 rounded-lg">
-                                <Briefcase size={20} />
+                    {/* Project Slots */}
+                    {settings.additionalProjectSlots.map((item, i) => (
+                        <div key={'proj' + i} className="flex justify-between items-center p-3 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:border-purple-500 transition-colors">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-purple-100 text-purple-600 rounded-lg">
+                                    <Briefcase size={20} />
+                                </div>
+                                <div>
+                                    <div className="font-bold dark:text-white capitalize">{item.label}</div>
+                                    <div className="text-xs text-zinc-500">Extra Project Space</div>
+                                </div>
                             </div>
-                            <div>
-                                <div className="font-bold dark:text-white">{item.label}</div>
-                                <div className="text-xs text-zinc-500">Extra Project Space</div>
-                            </div>
+                            <button
+                                onClick={() => setSelectedItem({ ...item, type: 'slots' })}
+                                className="px-4 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-black text-xs font-bold rounded-full hover:opacity-90"
+                            >
+                                LKR {item.price}
+                            </button>
                         </div>
-                        <button className="px-4 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-black text-xs font-bold rounded-full hover:opacity-90">
-                            LKR {item.price}
-                        </button>
-                    </div>
-                ))}
+                    ))}
 
-                {/* Just mocking Pins if not in settings, or implementing if parsed */}
-                {/* Assuming user mentioned logic similar to above */}
-            </div>
+                    {/* Pin Slots */}
+                    {settings.additionalPinSlots.map((item, i) => (
+                        <div key={'pin' + i} className="flex justify-between items-center p-3 border border-zinc-200 dark:border-zinc-700 rounded-lg hover:border-pink-500 transition-colors">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2 bg-pink-100 text-pink-600 rounded-lg">
+                                    <Shield size={20} />
+                                </div>
+                                <div>
+                                    <div className="font-bold dark:text-white capitalize">{item.label}</div>
+                                    <div className="text-xs text-zinc-500">Extra Pins</div>
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => setSelectedItem({ ...item, type: 'pins' })}
+                                className="px-4 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-black text-xs font-bold rounded-full hover:opacity-90"
+                            >
+                                LKR {item.price}
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <div className="animate-in slide-in-from-right duration-200">
+                    <button onClick={() => setSelectedItem(null)} className="text-xs text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">
+                        ← Back to items
+                    </button>
+
+                    <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-600 mb-4">
+                        <h4 className="font-bold text-lg mb-2 dark:text-white capitalize">Buy {selectedItem.label}</h4>
+                        <div className="text-3xl font-bold text-blue-600 dark:text-blue-400 mb-4">LKR {selectedItem.price}</div>
+
+                        <div className="text-sm text-zinc-600 dark:text-zinc-300 space-y-2 mb-4">
+                            <p>To purchase this item, please deposit the amount to the following bank account:</p>
+                        </div>
+
+                        <div className="bg-white dark:bg-zinc-800 p-3 rounded border border-zinc-200 dark:border-zinc-600 text-sm space-y-1">
+                            <div className="flex justify-between"><span className="text-zinc-500">Bank:</span> <span className="font-bold dark:text-white">{settings.bankDetails.bankName}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Branch:</span> <span className="font-bold dark:text-white">{settings.bankDetails.branch}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Acc No:</span> <span className="font-bold dark:text-white tracking-widest">{settings.bankDetails.accountNumber}</span></div>
+                            <div className="flex justify-between"><span className="text-zinc-500">Name:</span> <span className="font-bold dark:text-white">{settings.bankDetails.accountHolder}</span></div>
+                        </div>
+                    </div>
+
+                    <a
+                        href={`https://wa.me/94761779019?text=Hi, I want to buy ${selectedItem.label} (${selectedItem.type}) (User ID: ${userData.uid}). Here is my payment slip.`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg hover:shadow-xl active:scale-95"
+                    >
+                        <span>Send Slip via WhatsApp</span>
+                    </a>
+                </div>
+            )}
         </Modal>
     );
 }
 
-
 // 4. Settings Modal (Auto-save)
 export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
     const { settings, userData, updateAutoSaveInterval } = useAuth();
-    // In real app, we would update DB user pref here
-    // For now mocking local state update via console/alert as DB update logic for general user fields wasn't explicitly asked other than Plan logic reading
-    // Actually, "auto saving time - user can select". We should verify locking.
 
     // Helper to check locked status
-    const isLocked = (seconds: number) => {
-        if (!userData || !settings) return true;
-
-        // Rules from user description:
-        // Free: 1800, 1200 only.
-        // Pro: 1800, 1200, 600, 300.
-        // Ultra: All.
-
-        // Allowed sets
-        const freeAllowed = [1800, 1200];
-        const proAllowed = [1800, 1200, 600, 300];
-
+    const isLocked = (minPlan: string) => {
+        if (!userData) return true;
         if (userData.plan === 'ultra') return false;
-        if (userData.plan === 'pro') return !proAllowed.includes(seconds);
-        return !freeAllowed.includes(seconds); // Free
+        if (userData.plan === 'pro') return minPlan === 'ultra';
+        return minPlan === 'pro' || minPlan === 'ultra';
     };
 
     if (!settings || !userData) return null;
@@ -295,14 +391,14 @@ export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                         <Clock size={16} /> Auto-Save Interval
                     </label>
                     <div className="grid grid-cols-2 gap-2">
-                        {settings.autoSaveOptions.map(seconds => {
-                            const locked = isLocked(seconds);
-                            const selected = userData.autoSaveInterval === seconds * 1000;
+                        {settings.autoSaveOptions.map((option, i) => {
+                            const locked = isLocked(option.minPlan);
+                            const selected = userData.autoSaveInterval === option.value;
                             return (
                                 <button
-                                    key={seconds}
+                                    key={i}
                                     disabled={locked}
-                                    onClick={() => updateAutoSaveInterval(seconds * 1000)}
+                                    onClick={() => updateAutoSaveInterval(option.value)}
                                     className={`relative p-2 rounded border text-sm transition-all ${selected
                                         ? 'border-blue-500 bg-blue-50 text-blue-700 font-medium'
                                         : locked
@@ -310,18 +406,20 @@ export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                                             : 'border-zinc-200 hover:border-blue-300 dark:border-zinc-600 dark:text-white dark:hover:border-blue-500'
                                         }`}
                                 >
-                                    {Math.floor(seconds / 60)} min
+                                    {option.label}
                                     {locked && <div className="absolute top-1 right-1"><Shield size={10} className="text-zinc-400" /></div>}
                                 </button>
                             );
                         })}
                     </div>
-                    {userData.plan === 'free' && <p className="text-xs text-orange-500 mt-2">Upgrade to Pro for faster auto-saving.</p>}
                 </div>
             </div>
         </Modal>
     );
 }
+
+
+
 
 // 5. Main Profile Panel Dropdown
 export default function ProfilePanel({ onClose, onAction, position }: { onClose: () => void, onAction: (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => void, position?: { top: number, right: number } }) {

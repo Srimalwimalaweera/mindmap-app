@@ -11,21 +11,25 @@ interface AutoSaveControlProps {
     scheduledSaveTime: number | null;
 }
 
-const INTERVALS = [
-    { label: '30 sec', value: 30 * 1000, minPlan: 'ultra' },
-    { label: '1 min', value: 60 * 1000, minPlan: 'ultra' },
-    { label: '3 min', value: 3 * 60 * 1000, minPlan: 'ultra' },
-    { label: '5 min', value: 5 * 60 * 1000, minPlan: 'pro' },
-    { label: '10 min', value: 10 * 60 * 1000, minPlan: 'pro' },
-    { label: '30 min', value: 30 * 60 * 1000, minPlan: 'free' },
-];
+// Removed static INTERVALS
+
 
 export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, scheduledSaveTime }: AutoSaveControlProps) {
+    const { userData, settings } = useAuth();
+    const [selectedInterval, setSelectedInterval] = useState({ label: '30 min', value: 30 * 60 * 1000, minPlan: 'free' });
     const [isOpen, setIsOpen] = useState(false);
-    const [selectedInterval, setSelectedInterval] = useState(INTERVALS[5]); // Default 30 min
     const dropdownRef = useRef<HTMLDivElement>(null);
     const [timeLeft, setTimeLeft] = useState<string | null>(null);
-    const { userData } = useAuth();
+
+    const intervals = settings?.autoSaveOptions || []; // Use dynamic settings
+
+    useEffect(() => {
+        if (intervals.length > 0 && selectedInterval.value === 30 * 60 * 1000) {
+            // Try to set initial interval matching user preference
+            const match = intervals.find(i => i.value === userData?.autoSaveInterval);
+            if (match) setSelectedInterval(match as any);
+        }
+    }, [intervals, userData]);
 
     const isLocked = (minPlan: string) => {
         if (!userData) return true;
@@ -112,12 +116,12 @@ export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, sc
                         <div className="px-4 py-2 text-xs font-semibold text-zinc-500 dark:text-zinc-400 border-b border-zinc-100 dark:border-zinc-700/50 select-none">
                             Auto-save Interval
                         </div>
-                        {INTERVALS.map((interval) => {
+                        {intervals.map((interval) => {
                             const locked = isLocked(interval.minPlan);
                             return (
                                 <button
                                     key={interval.label}
-                                    onClick={() => !locked && handleIntervalSelect(interval)}
+                                    onClick={() => !locked && handleIntervalSelect(interval as any)}
                                     disabled={locked}
                                     className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between transition-colors
                                         ${selectedInterval.label === interval.label ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/10' :
