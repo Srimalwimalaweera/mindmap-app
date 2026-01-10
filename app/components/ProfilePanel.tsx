@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useAuth, PlanType } from '../context/AuthProvider';
 import { updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase'; // Direct auth & db
@@ -10,20 +11,35 @@ import { X, Check, Star, Settings, LogOut, User as UserIcon, Shield, Briefcase, 
 
 // --- Reusable Modal Wrapper ---
 function Modal({ title, isOpen, onClose, children }: { title: string, isOpen: boolean, onClose: () => void, children: React.ReactNode }) {
-    if (!isOpen) return null;
-    return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
+    const [mounted, setMounted] = useState(false);
+
+    useEffect(() => {
+        setMounted(true);
+        return () => setMounted(false);
+    }, []);
+
+    if (!isOpen || !mounted) return null;
+
+    return createPortal(
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={onClose}>
             <div
-                className="bg-white dark:bg-zinc-800 rounded-2xl shadow-xl p-6 w-full max-w-md mx-4 relative transform transition-all scale-100 border border-zinc-200 dark:border-zinc-700"
+                className="bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 relative transform transition-all scale-100 border border-zinc-200 dark:border-zinc-700"
                 onClick={(e) => e.stopPropagation()}
             >
-                <button onClick={onClose} className="absolute top-4 right-4 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200">
-                    <X size={20} />
-                </button>
-                <h3 className="text-xl font-bold text-zinc-800 dark:text-white mb-6">{title}</h3>
+                <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xl font-bold text-zinc-800 dark:text-white">{title}</h3>
+                    <button
+                        onClick={onClose}
+                        className="p-2 -mr-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 hover:bg-zinc-100 dark:hover:bg-zinc-700 rounded-full transition-colors"
+                        aria-label="Close"
+                    >
+                        <X size={20} />
+                    </button>
+                </div>
                 {children}
             </div>
-        </div>
+        </div>,
+        document.body
     );
 }
 
@@ -256,29 +272,36 @@ export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
 }
 
 // 5. Main Profile Panel Dropdown
-export default function ProfilePanel({ onClose, onAction }: { onClose: () => void, onAction: (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => void }) {
+export default function ProfilePanel({ onClose, onAction, position }: { onClose: () => void, onAction: (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => void, position?: { top: number, right: number } }) {
     const { logout } = useAuth();
+    const [mounted, setMounted] = useState(false);
 
-    // We render a transparent backdrop to catch outside clicks for the dropdown itself
-    // But since Header will handle the outside click for the dropdown via a separate overlay, 
-    // here we just render the menu.
-    // Actually, simpler to put the backdrop here if we want self-contained close.
-    // But Header controls visibility. Let's assume Header handles "Click Outside" to hide this component.
+    useEffect(() => {
+        setMounted(true);
+        return () => setMounted(false);
+    }, []);
 
     const handleAction = (action: 'profile' | 'upgrade' | 'slots' | 'settings') => {
         onAction(action);
-        // onClose(); // We don't close here, Header handles state, but onAction implies switching view.
     };
 
-    return (
-        <div className="absolute top-16 right-6 w-64 bg-white dark:bg-zinc-800 rounded-xl shadow-2xl border border-zinc-100 dark:border-zinc-700 py-2 animate-in fade-in slide-in-from-top-2 z-[60]">
+    if (!mounted) return null;
+
+    const style = position ? { top: position.top, right: position.right } : { top: '100%', right: 0 }; // Fallback if no position passed
+
+    return createPortal(
+        <div
+            className="fixed w-64 bg-white dark:bg-zinc-800 rounded-xl shadow-2xl border border-zinc-100 dark:border-zinc-700 py-2 animate-in fade-in slide-in-from-top-2 z-[60]"
+            style={style}
+        >
             <MenuItem icon={<UserIcon size={16} />} label="Profile" onClick={() => handleAction('profile')} />
             <MenuItem icon={<Star size={16} />} label="Upgrade to Pro" onClick={() => handleAction('upgrade')} highlight />
             <MenuItem icon={<Plus size={16} />} label="Buy Project Slots" onClick={() => handleAction('slots')} />
             <div className="h-[1px] bg-zinc-100 dark:bg-zinc-700 my-1" />
             <MenuItem icon={<Settings size={16} />} label="Settings" onClick={() => handleAction('settings')} />
             <MenuItem icon={<LogOut size={16} />} label="Logout" onClick={() => { logout(); onClose(); }} danger />
-        </div>
+        </div>,
+        document.body
     );
 }
 

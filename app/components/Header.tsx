@@ -4,9 +4,10 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter, usePathname } from 'next/navigation';
 // ... imports
+import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthProvider';
 import ProfilePanel, { ProfileModal, UpgradeModal, BuySlotsModal, SettingsModal } from './ProfilePanel';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 // Simplified Header Props (remove user/onLogout props as they come from context)
 interface HeaderProps {
@@ -33,6 +34,19 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
     const isEditMode = pathname?.startsWith('/map/');
     const [showProfile, setShowProfile] = useState(false);
     const [activeModal, setActiveModal] = useState<'profile' | 'upgrade' | 'slots' | 'settings' | null>(null);
+    const profileBtnRef = useRef<HTMLButtonElement>(null);
+    const [panelPos, setPanelPos] = useState({ top: 0, right: 0 });
+
+    const handleProfileClick = () => {
+        if (!showProfile && profileBtnRef.current) {
+            const rect = profileBtnRef.current.getBoundingClientRect();
+            setPanelPos({
+                top: rect.bottom + 12,
+                right: window.innerWidth - rect.right
+            });
+        }
+        setShowProfile(!showProfile);
+    };
 
     const handleAction = (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => {
         setShowProfile(false);
@@ -137,14 +151,13 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                 {/* User Profile */}
                 {user ? (
                     <div className="relative">
-                        {/* Transparent Overlay for closing dropdown */}
-                        {showProfile && (
-                            <div className="fixed inset-0 z-50 cursor-default" onClick={() => setShowProfile(false)} />
-                        )}
+                        {/* Transparent Overlay for closing dropdown - Managed by ProfileOverlay component below */}
+                        {showProfile && <ProfileOverlay onClose={() => setShowProfile(false)} />}
 
                         <button
+                            ref={profileBtnRef}
                             className="flex items-center gap-3 pl-4 border-l border-white/10 ml-2 focus:outline-none relative z-[51]" // z-51 to stay above overlay
-                            onClick={() => setShowProfile(!showProfile)}
+                            onClick={handleProfileClick}
                         >
                             {user.photoURL ? (
                                 <Image
@@ -162,14 +175,9 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                         </button>
 
                         {showProfile && (
-                            <ProfilePanel onClose={() => setShowProfile(false)} onAction={handleAction} />
+                            <ProfilePanel onClose={() => setShowProfile(false)} onAction={handleAction} position={panelPos} />
                         )}
 
-                        {/* Modals managed by Header state to persist after dropdown close */}
-                        {activeModal === 'profile' && <ProfileModal isOpen={true} onClose={() => setActiveModal(null)} />}
-                        {activeModal === 'upgrade' && <UpgradeModal isOpen={true} onClose={() => setActiveModal(null)} />}
-                        {activeModal === 'slots' && <BuySlotsModal isOpen={true} onClose={() => setActiveModal(null)} />}
-                        {activeModal === 'settings' && <SettingsModal isOpen={true} onClose={() => setActiveModal(null)} />}
                     </div>
                 ) : (
                     <button
@@ -180,6 +188,22 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                     </button>
                 )}
             </div>
+
+            {/* Modals managed by Header state - Rendered at root level for proper z-indexing */}
+            {activeModal === 'profile' && <ProfileModal isOpen={true} onClose={() => setActiveModal(null)} />}
+            {activeModal === 'upgrade' && <UpgradeModal isOpen={true} onClose={() => setActiveModal(null)} />}
+            {activeModal === 'slots' && <BuySlotsModal isOpen={true} onClose={() => setActiveModal(null)} />}
+            {activeModal === 'settings' && <SettingsModal isOpen={true} onClose={() => setActiveModal(null)} />}
         </header>
+    );
+}
+// Helper for Overlay
+function ProfileOverlay({ onClose }: { onClose: () => void }) {
+    const [mounted, setMounted] = useState(false);
+    useEffect(() => setMounted(true), []);
+    if (!mounted) return null;
+    return createPortal(
+        <div className="fixed inset-0 z-[55] bg-transparent cursor-default" onClick={onClose} />,
+        document.body
     );
 }
