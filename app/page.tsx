@@ -233,7 +233,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleSoftDelete = async (e: React.MouseEvent, map: MindMapData) => {
+  const handleSoftDelete = async (e: React.MouseEvent, map: MindMapData | BookData) => {
     e.stopPropagation();
     if (!user) return;
 
@@ -253,7 +253,7 @@ export default function Dashboard() {
     );
   };
 
-  const handleRestore = async (map: MindMapData) => {
+  const handleRestore = async (map: MindMapData | BookData) => {
     if (!user) return;
     setMaps(maps.map(m => m.id === map.id ? { ...m, isTrashed: false, trashedAt: undefined } : m));
     if (map.type === 'book') {
@@ -263,7 +263,7 @@ export default function Dashboard() {
     }
   };
 
-  const handlePermanentDelete = async (map: MindMapData) => {
+  const handlePermanentDelete = async (map: MindMapData | BookData) => {
     if (!user) return;
     requestConfirmation(
       "Delete Permanently?",
