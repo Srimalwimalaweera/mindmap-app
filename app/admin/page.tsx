@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthProvider';
 import { useRouter } from 'next/navigation';
 import { db } from '@/lib/firebase';
 import { approvePayment, getPayments, rejectPayment } from '../services/paymentService';
-import { Loader2, Check, X, ShieldAlert, History, Star, Briefcase, Shield } from 'lucide-react';
+import { Loader2, Check, X, ShieldAlert, History, Star, Briefcase, Shield, ArrowLeft } from 'lucide-react';
 import { getDoc, setDoc, doc } from 'firebase/firestore';
 
 // Helper for Relative Time
@@ -33,13 +33,17 @@ function SettingsEditor() {
                 plans: await getDoc(doc(db, 'settings', 'plans')),
                 pins: await getDoc(doc(db, 'settings', 'pin_settings')),
                 limits: await getDoc(doc(db, 'settings', 'default_project_limit')),
-                bank: await getDoc(doc(db, 'settings', 'bank_details'))
+                bank: await getDoc(doc(db, 'settings', 'bank_details')),
+                addSlots: await getDoc(doc(db, 'settings', 'additional_project_items')),
+                addPins: await getDoc(doc(db, 'settings', 'additional_project_pins'))
             };
             setConfig({
                 plans: docs.plans.data() || {},
                 pins: docs.pins.data() || {},
                 limits: docs.limits.data() || {},
-                bank: docs.bank.data() || {}
+                bank: docs.bank.data() || {},
+                addSlots: docs.addSlots.data() || {},
+                addPins: docs.addPins.data() || {}
             });
         } catch (e) {
             console.error(e);
@@ -62,8 +66,12 @@ function SettingsEditor() {
             if (section === 'pins') docId = 'pin_settings';
             if (section === 'limits') docId = 'default_project_limit';
             if (section === 'bank') docId = 'bank_details';
+            if (section === 'addSlots') docId = 'additional_project_items';
+            if (section === 'addPins') docId = 'additional_project_pins';
 
-            await setDoc(doc(db, col, docId), data, { merge: true });
+            // For dynamic lists (addSlots/addPins), we overwrite to support deletion. For others, merge is fine/safer.
+            const overwrite = section === 'addSlots' || section === 'addPins';
+            await setDoc(doc(db, col, docId), data, { merge: !overwrite });
 
             setMsg('Saved!');
             setTimeout(() => setMsg(''), 3000);
@@ -73,6 +81,81 @@ function SettingsEditor() {
         } finally {
             setLoading(false);
         }
+    };
+
+    // Helper for List Management
+    const ListEditor = ({ title, data, type, section }: { title: string, data: any, type: 'Slots' | 'Pins', section: string }) => {
+        const [qty, setQty] = useState('');
+        const [price, setPrice] = useState('');
+
+        const handleAdd = () => {
+            if (!qty || !price) return;
+            const key = `${qty} ${type}`; // e.g., "5 Slots"
+            const newData = { ...data, [key]: parseInt(price) };
+            setConfig({ ...config, [section]: newData });
+            setQty('');
+            setPrice('');
+        };
+
+        const handleDelete = (key: string) => {
+            const newData = { ...data };
+            delete newData[key];
+            setConfig({ ...config, [section]: newData });
+        };
+
+        return (
+            <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
+                <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2">
+                    {type === 'Slots' ? <Briefcase size={16} /> : <Shield size={16} />}
+                    {title}
+                </h3>
+
+                {/* Internal CSS for ListEditor can go here or use Tailwind */}
+                <div className="space-y-2 mb-4">
+                    {Object.entries(data).map(([key, val]) => (
+                        <div key={key} className="flex justify-between items-center p-2 bg-white dark:bg-zinc-800 rounded border border-zinc-200 dark:border-zinc-600">
+                            <div>
+                                <span className="font-bold dark:text-white">{key}</span>
+                            </div>
+                            <div className="flex items-center gap-3">
+                                <span className="text-zinc-600 dark:text-zinc-300 font-mono">LKR {val as number}</span>
+                                <button onClick={() => handleDelete(key)} className="text-red-500 hover:bg-red-50 p-1 rounded"><X size={14} /></button>
+                            </div>
+                        </div>
+                    ))}
+                    {Object.keys(data).length === 0 && <div className="text-center text-zinc-400 text-xs italic">No items defined</div>}
+                </div>
+
+                <div className="flex gap-2 items-end border-t border-zinc-200 dark:border-zinc-600 pt-3">
+                    <div>
+                        <label className="block text-[10px] uppercase text-zinc-500 font-bold mb-1">Qty ({type})</label>
+                        <input
+                            type="number"
+                            value={qty}
+                            onChange={e => setQty(e.target.value)}
+                            placeholder="e.g. 5"
+                            className="w-20 p-2 rounded border dark:bg-zinc-800 dark:border-zinc-600 dark:text-white text-sm"
+                        />
+                    </div>
+                    <div className="flex-1">
+                        <label className="block text-[10px] uppercase text-zinc-500 font-bold mb-1">Price (LKR)</label>
+                        <input
+                            type="number"
+                            value={price}
+                            onChange={e => setPrice(e.target.value)}
+                            placeholder="e.g. 500"
+                            className="w-full p-2 rounded border dark:bg-zinc-800 dark:border-zinc-600 dark:text-white text-sm"
+                        />
+                    </div>
+                    <button onClick={handleAdd} disabled={!qty || !price} className="bg-zinc-800 dark:bg-zinc-200 dark:text-black text-white px-3 py-2 rounded text-sm font-bold hover:opacity-90 disabled:opacity-50">
+                        Add
+                    </button>
+                </div>
+                <div className="mt-4 text-right">
+                    <button onClick={() => handleSave(section, data)} className="bg-blue-600 text-white px-3 py-1.5 rounded text-xs font-bold hover:bg-blue-700">Save List</button>
+                </div>
+            </div>
+        );
     };
 
     if (loading && !config) return <div className="py-10 text-center"><Loader2 className="animate-spin inline" /></div>;
@@ -115,10 +198,16 @@ function SettingsEditor() {
                 </div>
             </div>
 
+            {/* Dynamic Lists */}
+            <div className="grid md:grid-cols-2 gap-6">
+                <ListEditor title="Additional Project Slots" data={config.addSlots} type="Slots" section="addSlots" />
+                <ListEditor title="Additional Pin Slots" data={config.addPins} type="Pins" section="addPins" />
+            </div>
+
             {/* Limits */}
             <div className="grid md:grid-cols-2 gap-6">
                 <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
-                    <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><Briefcase size={16} /> Project Limits</h3>
+                    <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><Briefcase size={16} /> Default Project Limits (By Plan)</h3>
                     <div className="space-y-3">
                         {['free', 'pro', 'ultra'].map(plan => (
                             <div key={plan} className="flex justify-between items-center">
@@ -138,7 +227,7 @@ function SettingsEditor() {
                 </div>
 
                 <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
-                    <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><Shield size={16} /> Pin Limits</h3>
+                    <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><Shield size={16} /> Default Pin Limits (By Plan)</h3>
                     <div className="space-y-3">
                         {['free', 'pro', 'ultra'].map(plan => (
                             <div key={plan} className="flex justify-between items-center">
@@ -271,7 +360,16 @@ export default function AdminPage() {
     return (
         <div className="min-h-screen bg-zinc-50 dark:bg-zinc-900 p-8">
             <div className="max-w-6xl mx-auto">
-                <h1 className="text-3xl font-bold mb-8 dark:text-white">Admin Dashboard</h1>
+                <div className="flex items-center gap-4 mb-8">
+                    <button
+                        onClick={() => router.push('/')}
+                        className="p-2 -ml-2 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors"
+                        title="Back to Dashboard"
+                    >
+                        <ArrowLeft size={24} />
+                    </button>
+                    <h1 className="text-3xl font-bold dark:text-white">Admin Dashboard</h1>
+                </div>
 
                 {/* Tabs */}
                 <div className="flex gap-4 mb-6 border-b border-zinc-200 dark:border-zinc-700">
