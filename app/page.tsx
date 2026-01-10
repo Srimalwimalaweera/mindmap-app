@@ -14,7 +14,7 @@ import {
   permanentDeleteMindMap,
   emptyTrash
 } from './services/mindmapService';
-import { createBook, getBooks, updateBook, softDeleteBook, restoreBook, permanentDeleteBook, BookData } from './services/bookService';
+import { createBook, getBooks, updateBook, softDeleteBook, restoreBook, permanentDeleteBook, emptyBooksTrash, BookData } from './services/bookService';
 import Image from 'next/image';
 
 import LandingPage from './components/LandingPage';
@@ -26,7 +26,11 @@ import { useAuth } from '@/app/context/AuthProvider';
 
 export default function Dashboard() {
   const { user, userData, settings, loading: authLoading, logout } = useAuth(); // Use global auth
-  const [maps, setMaps] = useState<(MindMapData | BookData)[]>([]);
+
+  // Custom type to track source collection (fix for ghost items)
+  type ProjectItem = (MindMapData | BookData) & { source: 'markmaps' | 'books' };
+
+  const [maps, setMaps] = useState<ProjectItem[]>([]);
   // const [loading, setLoading] = useState(true); // Removed local loading
   const loading = authLoading; // Alias for compatibility with existing code if needed, or just use authLoading directly. 
   // Actually, let's keep a local loading for maps? 
@@ -74,13 +78,17 @@ export default function Dashboard() {
     try {
       const userMaps = await getUserMindMaps(currentUser.uid);
       const userBooks = await getBooks(currentUser.uid);
-      const allProjects = [...userMaps, ...userBooks];
+      // Tag them with source
+      const markedMaps = userMaps.map(m => ({ ...m, source: 'markmaps' } as ProjectItem));
+      const markedBooks = userBooks.map(b => ({ ...b, source: 'books' } as ProjectItem));
+
+      const allProjects = [...markedMaps, ...markedBooks];
 
       // Client-side auto-delete check (older than 30 days)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const mapsKeep: (MindMapData | BookData)[] = [];
+      const mapsKeep: ProjectItem[] = [];
       const mapsToDelete: string[] = [];
 
       allProjects.forEach(map => {
@@ -156,21 +164,8 @@ export default function Dashboard() {
 
     setCreating(true);
     try {
-      const newMapId = await createMindMap(user.uid, newMapTitle, selectedType);
-      // ...
-
-      // If it's a map, go to editor. If book, maybe just show in list for now (as user said feature comes later)
-      // For now, regardless of type, we redirect to map editor or stays on dashboard. 
-      // User request: "digital book feature... I will tell later". So just save and show.
-
       if (selectedType === 'map') {
-        const newMapId = await createMindMap(user.uid, newMapTitle, 'map'); // Fix: Pass 3 args if needed or just 2. createMindMap(uid, title, type?)
-        // Wait, existing code uses createMindMap(uid, title, selectedType).
-        // I need to check createMindMap signature but I saw it takes (uid, title, type='map').
-        // Let me stick to what works for map.
-        // Actually, wait, I replaced the call. Let's fix.
-        // Previous call: const newMapId = await createMindMap(user.uid, newMapTitle, selectedType);
-        // But selectedType can be 'book' now. createMindMap returns ID.
+        const newMapId = await createMindMap(user.uid, newMapTitle, 'map');
         router.push(`/map/${newMapId}`);
       } else {
         const newBookId = await createBook(user.uid, newMapTitle, bookOrientation, bookSubject);
@@ -190,7 +185,7 @@ export default function Dashboard() {
     }
   };
 
-  const handlePin = async (e: React.MouseEvent, map: MindMapData | BookData) => {
+  const handlePin = async (e: React.MouseEvent, map: ProjectItem) => {
     e.stopPropagation();
     if (!user) return;
     const newStatus = !map.isPinned;
@@ -212,7 +207,8 @@ export default function Dashboard() {
     // Optimistic update
     setMaps(maps.map(m => m.id === map.id ? { ...m, isPinned: newStatus } : m));
 
-    if (map.type === 'book') {
+    // Use source if available, otherwise fallback to type
+    if (map.source === 'books' || (!map.source && map.type === 'book')) {
       await updateBook(map.id, { isPinned: newStatus });
     } else {
       await togglePinMindMap(map.id, newStatus);
@@ -233,7 +229,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleSoftDelete = async (e: React.MouseEvent, map: MindMapData | BookData) => {
+  const handleSoftDelete = async (e: React.MouseEvent, map: ProjectItem) => {
     e.stopPropagation();
     if (!user) return;
 
@@ -243,7 +239,8 @@ export default function Dashboard() {
       "Move to Trash",
       async () => {
         setMaps(prev => prev.map(m => m.id === map.id ? { ...m, isTrashed: true, trashedAt: new Date().toISOString() } : m));
-        if (map.type === 'book') {
+
+        if (map.source === 'books' || (!map.source && map.type === 'book')) {
           await softDeleteBook(map.id);
         } else {
           await softDeleteMindMap(map.id);
@@ -253,17 +250,18 @@ export default function Dashboard() {
     );
   };
 
-  const handleRestore = async (map: MindMapData | BookData) => {
+  const handleRestore = async (map: ProjectItem) => {
     if (!user) return;
     setMaps(maps.map(m => m.id === map.id ? { ...m, isTrashed: false, trashedAt: undefined } : m));
-    if (map.type === 'book') {
+
+    if (map.source === 'books' || (!map.source && map.type === 'book')) {
       await restoreBook(map.id);
     } else {
       await restoreMindMap(map.id);
     }
   };
 
-  const handlePermanentDelete = async (map: MindMapData | BookData) => {
+  const handlePermanentDelete = async (map: ProjectItem) => {
     if (!user) return;
     requestConfirmation(
       "Delete Permanently?",
@@ -271,7 +269,8 @@ export default function Dashboard() {
       "Delete Permanently",
       async () => {
         setMaps(prev => prev.filter(m => m.id !== map.id));
-        if (map.type === 'book') {
+
+        if (map.source === 'books' || (!map.source && map.type === 'book')) {
           await permanentDeleteBook(user.uid, map.id);
         } else {
           await permanentDeleteMindMap(map.id);
@@ -289,7 +288,10 @@ export default function Dashboard() {
       "Empty Trash",
       async () => {
         setMaps(prev => prev.filter(m => !m.isTrashed));
-        await emptyTrash(user.uid);
+        await Promise.all([
+          emptyTrash(user.uid),
+          emptyBooksTrash(user.uid)
+        ]);
       },
       true
     );

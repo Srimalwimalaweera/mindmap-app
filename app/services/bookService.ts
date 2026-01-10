@@ -35,7 +35,7 @@ export const createBook = async (userId: string, title: string, orientation: 'po
 };
 
 export const getBooks = async (userId: string): Promise<BookData[]> => {
-    const q = query(collection(db, COLLECTION_NAME), where('userId', '==', userId), where('isTrashed', '==', false));
+    const q = query(collection(db, COLLECTION_NAME), where('userId', '==', userId));
     const snapshot = await getDocs(q);
     return snapshot.docs.map(d => ({ id: d.id, ...d.data(), type: 'book' } as BookData));
 };
@@ -74,7 +74,19 @@ export const loadBookPages = async (uid: string, bookId: string): Promise<any[]>
 };
 
 export const softDeleteBook = async (bookId: string) => {
-    await updateBook(bookId, { isTrashed: true, trashedAt: new Date().toISOString() });
+    console.log(`[BookService] Soft deleting book: ${bookId}`);
+    try {
+        const docRef = doc(db, COLLECTION_NAME, bookId);
+        await updateDoc(docRef, {
+            isTrashed: true,
+            trashedAt: new Date().toISOString(),
+            updatedAt: serverTimestamp()
+        });
+        console.log(`[BookService] Successfully marked book ${bookId} as trashed.`);
+    } catch (e) {
+        console.error(`[BookService] Error soft deleting book ${bookId}`, e);
+        throw e;
+    }
 };
 
 export const restoreBook = async (bookId: string) => {
@@ -92,4 +104,30 @@ export const permanentDeleteBook = async (userId: string, bookId: string) => {
     } catch (e) {
         console.warn("Storage file not found or already deleted", e);
     }
+};
+
+export const emptyBooksTrash = async (userId: string) => {
+    const q = query(
+        collection(db, COLLECTION_NAME),
+        where("userId", "==", userId),
+        where("isTrashed", "==", true)
+    );
+    const querySnapshot = await getDocs(q);
+
+    // We cannot use batch for storage deletions, so we iterate
+    const deletePromises = querySnapshot.docs.map(async (docSnap) => {
+        // Delete Firestore Doc
+        await deleteDoc(doc(db, COLLECTION_NAME, docSnap.id));
+
+        // Delete Storage File
+        try {
+            const storageRef = ref(storage, `books/${userId}/${docSnap.id}.json`);
+            await deleteObject(storageRef);
+        } catch (e) {
+            // Ignore storage not found
+            console.warn(`[BookService] Storage clean for ${docSnap.id} skipped/failed`, e);
+        }
+    });
+
+    await Promise.all(deletePromises);
 };
