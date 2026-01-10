@@ -23,6 +23,9 @@ export interface UserData {
     totalMaps: number;    // Statistics
     totalBooks: number;   // Statistics
     autoSaveInterval: number; // User preference
+    role: 'member' | 'admin';
+    banUntil?: number;
+    isPermabanned?: boolean;
 }
 
 export interface AppSettings {
@@ -233,7 +236,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     extraPins: data.extraPins || 0,
                     totalMaps: data.totalMaps || 0,
                     totalBooks: data.totalBooks || 0,
-                    autoSaveInterval: data.autoSaveInterval || 1800000 // Default 30 min
+                    autoSaveInterval: data.autoSaveInterval || 1800000, // Default 30 min
+                    role: data.role || 'member',
+                    banUntil: data.banUntil,
+                    isPermabanned: data.isPermabanned
                 });
             } else {
                 // Initialize New User
@@ -250,7 +256,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     extraPins: 0,
                     totalMaps: 0,
                     totalBooks: 0,
-                    autoSaveInterval: 1800000 // 30 min
+                    autoSaveInterval: 1800000, // 30 min
+                    role: 'member'
                 };
                 await setDoc(userRef, newUser as any);
                 setUserData(newUser);

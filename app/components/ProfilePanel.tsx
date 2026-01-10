@@ -6,9 +6,11 @@ import { useAuth, PlanType } from '../context/AuthProvider';
 import { updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase'; // Direct auth & db
 import { getUserRealtimeCounts } from '../services/mindmapService';
+import { createPaymentRequest } from '../services/paymentService'; // Payment Service
+import { useRouter } from 'next/navigation';
 import { doc, setDoc } from 'firebase/firestore';
 import Image from 'next/image';
-import { X, Check, Star, Settings, LogOut, User as UserIcon, Shield, Briefcase, Clock, Plus } from 'lucide-react';
+import { X, Check, Star, Settings, LogOut, User as UserIcon, Shield, Briefcase, Clock, Plus, LayoutDashboard, Loader2, AlertTriangle } from 'lucide-react';
 
 // --- Reusable Modal Wrapper ---
 function Modal({ title, isOpen, onClose, children }: { title: string, isOpen: boolean, onClose: () => void, children: React.ReactNode }) {
@@ -195,6 +197,49 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
     const plans: PlanType[] = ['pro', 'ultra'];
     const [selectedPlan, setSelectedPlan] = useState<PlanType | null>(null);
 
+    const [processing, setProcessing] = useState(false);
+    const [statusMsg, setStatusMsg] = useState('');
+    const [timeLeft, setTimeLeft] = useState(0);
+
+    const handlePayment = async () => {
+        if (!selectedPlan || !userData) return;
+        setProcessing(true);
+        setStatusMsg('Creating request...');
+
+        try {
+            await createPaymentRequest(userData.uid, {
+                type: 'upgrade',
+                itemId: selectedPlan,
+                amount: settings.plans[selectedPlan],
+                details: `Upgrade to ${selectedPlan}`
+            });
+
+            setStatusMsg('Send your slip');
+            setTimeLeft(5);
+
+            // Countdown & Redirect
+            let count = 5;
+            const timer = setInterval(() => {
+                count--;
+                setTimeLeft(count);
+                if (count <= 0) {
+                    clearInterval(timer);
+                    const msg = `Hi, I want to upgrade to ${selectedPlan} plan (User ID: ${userData.uid}). Here is my payment slip.`;
+                    window.open(`https://wa.me/94761779019?text=${encodeURIComponent(msg)}`, '_blank');
+                    onClose();
+                }
+            }, 1000);
+
+        } catch (err: any) {
+            console.error(err);
+            setStatusMsg(err.message || 'Error occurred');
+            setTimeout(() => {
+                setProcessing(false);
+                setStatusMsg('');
+            }, 3000);
+        }
+    };
+
     return (
         <Modal title="Upgrade Plan" isOpen={isOpen} onClose={onClose}>
             {!selectedPlan ? (
@@ -236,8 +281,27 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                     </div>
                 </>
             ) : (
-                <div className="animate-in slide-in-from-right duration-200">
-                    <button onClick={() => setSelectedPlan(null)} className="text-xs text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">
+                <div className="animate-in slide-in-from-right duration-200 relative">
+                    {processing && (
+                        <div className="absolute inset-0 z-20 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl animate-in fade-in duration-200">
+                            {timeLeft > 0 ? (
+                                <>
+                                    <Loader2 size={48} className="text-blue-600 animate-spin mb-4" />
+                                    <h4 className="text-xl font-bold mb-1 dark:text-white">{statusMsg}</h4>
+                                    <p className="text-zinc-500 text-sm">Redirecting in {timeLeft}s...</p>
+                                </>
+                            ) : statusMsg.includes('Error') || statusMsg.includes('banned') || statusMsg.includes('wait') ? (
+                                <>
+                                    <AlertTriangle size={48} className="text-red-500 mb-4" />
+                                    <h4 className="text-lg font-bold mb-1 text-center text-red-600 px-4">{statusMsg}</h4>
+                                </>
+                            ) : (
+                                <Loader2 size={48} className="text-blue-600 animate-spin" />
+                            )}
+                        </div>
+                    )}
+
+                    <button onClick={() => setSelectedPlan(null)} disabled={processing} className="text-xs text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">
                         ← Back to plans
                     </button>
 
@@ -257,14 +321,13 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                         </div>
                     </div>
 
-                    <a
-                        href={`https://wa.me/94761779019?text=Hi, I want to upgrade to ${selectedPlan} plan (User ID: ${userData.uid}). Here is my payment slip.`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg hover:shadow-xl active:scale-95"
+                    <button
+                        onClick={handlePayment}
+                        disabled={processing}
+                        className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg hover:shadow-xl active:scale-95 disabled:opacity-50 disabled:grayscale"
                     >
-                        <span>Send Slip via WhatsApp</span>
-                    </a>
+                        <span>I have Paid & Send Slip</span>
+                    </button>
                     <p className="text-center text-xs text-zinc-400 mt-2">Send a photo of your deposit slip/transfer receipt.</p>
                 </div>
             )}
@@ -284,6 +347,49 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
     }, [isOpen, refreshSettings]);
 
     if (!settings || !userData) return null;
+
+    const [processing, setProcessing] = useState(false);
+    const [statusMsg, setStatusMsg] = useState('');
+    const [timeLeft, setTimeLeft] = useState(0);
+
+    const handlePayment = async () => {
+        if (!selectedItem || !userData) return;
+        setProcessing(true);
+        setStatusMsg('Creating request...');
+
+        try {
+            await createPaymentRequest(userData.uid, {
+                type: selectedItem.type,
+                itemId: selectedItem.label, // Or key if available, but label is unique-ish
+                amount: selectedItem.price,
+                details: `Buy ${selectedItem.label} (${selectedItem.type})`
+            });
+
+            setStatusMsg('Send your slip');
+            setTimeLeft(5);
+
+            // Countdown & Redirect
+            let count = 5;
+            const timer = setInterval(() => {
+                count--;
+                setTimeLeft(count);
+                if (count <= 0) {
+                    clearInterval(timer);
+                    const msg = `Hi, I want to buy ${selectedItem.label} (${selectedItem.type}) (User ID: ${userData.uid}). Here is my payment slip.`;
+                    window.open(`https://wa.me/94761779019?text=${encodeURIComponent(msg)}`, '_blank');
+                    onClose();
+                }
+            }, 1000);
+
+        } catch (err: any) {
+            console.error(err);
+            setStatusMsg(err.message || 'Error occurred');
+            setTimeout(() => {
+                setProcessing(false);
+                setStatusMsg('');
+            }, 3000);
+        }
+    };
 
     return (
         <Modal title={selectedItem ? "Confirm Purchase" : "Buy Extra Resources"} isOpen={isOpen} onClose={onClose}>
@@ -334,8 +440,27 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                     ))}
                 </div>
             ) : (
-                <div className="animate-in slide-in-from-right duration-200">
-                    <button onClick={() => setSelectedItem(null)} className="text-xs text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">
+                <div className="animate-in slide-in-from-right duration-200 relative">
+                    {processing && (
+                        <div className="absolute inset-0 z-20 bg-white/90 dark:bg-zinc-800/90 backdrop-blur-sm flex flex-col items-center justify-center rounded-xl animate-in fade-in duration-200">
+                            {timeLeft > 0 ? (
+                                <>
+                                    <Loader2 size={48} className="text-blue-600 animate-spin mb-4" />
+                                    <h4 className="text-xl font-bold mb-1 dark:text-white">{statusMsg}</h4>
+                                    <p className="text-zinc-500 text-sm">Redirecting in {timeLeft}s...</p>
+                                </>
+                            ) : statusMsg.includes('Error') || statusMsg.includes('banned') || statusMsg.includes('wait') ? (
+                                <>
+                                    <AlertTriangle size={48} className="text-red-500 mb-4" />
+                                    <h4 className="text-lg font-bold mb-1 text-center text-red-600 px-4">{statusMsg}</h4>
+                                </>
+                            ) : (
+                                <Loader2 size={48} className="text-blue-600 animate-spin" />
+                            )}
+                        </div>
+                    )}
+
+                    <button onClick={() => setSelectedItem(null)} disabled={processing} className="text-xs text-zinc-500 hover:text-zinc-800 mb-4 flex items-center gap-1">
                         ← Back to items
                     </button>
 
@@ -355,14 +480,13 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                         </div>
                     </div>
 
-                    <a
-                        href={`https://wa.me/94761779019?text=Hi, I want to buy ${selectedItem.label} (${selectedItem.type}) (User ID: ${userData.uid}). Here is my payment slip.`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg hover:shadow-xl active:scale-95"
+                    <button
+                        onClick={handlePayment}
+                        disabled={processing}
+                        className="w-full flex items-center justify-center gap-2 bg-[#25D366] text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all shadow-lg hover:shadow-xl active:scale-95 disabled:opacity-50 disabled:grayscale"
                     >
-                        <span>Send Slip via WhatsApp</span>
-                    </a>
+                        <span>I have Paid & Send Slip</span>
+                    </button>
                 </div>
             )}
         </Modal>
@@ -423,7 +547,8 @@ export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
 
 // 5. Main Profile Panel Dropdown
 export default function ProfilePanel({ onClose, onAction, position }: { onClose: () => void, onAction: (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => void, position?: { top: number, right: number } }) {
-    const { logout } = useAuth();
+    const { logout, userData } = useAuth();
+    const router = useRouter();
     const [mounted, setMounted] = useState(false);
 
     useEffect(() => {
@@ -445,7 +570,10 @@ export default function ProfilePanel({ onClose, onAction, position }: { onClose:
             style={style}
         >
             <MenuItem icon={<UserIcon size={16} />} label="Profile" onClick={() => handleAction('profile')} />
-            <MenuItem icon={<Star size={16} />} label="Upgrade to Pro" onClick={() => handleAction('upgrade')} highlight />
+            {userData?.role === 'admin' && (
+                <MenuItem icon={<LayoutDashboard size={16} />} label="Admin Panel" onClick={() => { onClose(); router.push('/admin'); }} highlight />
+            )}
+            <MenuItem icon={<Star size={16} />} label="Upgrade to Pro" onClick={() => handleAction('upgrade')} />
             <MenuItem icon={<Plus size={16} />} label="Buy Project Slots" onClick={() => handleAction('slots')} />
             <div className="h-[1px] bg-zinc-100 dark:bg-zinc-700 my-1" />
             <MenuItem icon={<Settings size={16} />} label="Settings" onClick={() => handleAction('settings')} />
