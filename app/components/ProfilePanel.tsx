@@ -132,6 +132,14 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
                     <div>
                         <div className="text-xs text-zinc-500 dark:text-zinc-400 uppercase font-bold">Current Plan</div>
                         <div className="text-lg font-bold text-indigo-700 dark:text-indigo-300 capitalize">{userData.plan}</div>
+                        {userData.plan !== 'free' && userData.planExpiresAt && (
+                            <div className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 flex flex-col">
+                                <span>Expires: {new Date(userData.planExpiresAt).toLocaleDateString()}</span>
+                                <span className={`font-bold ${Math.ceil((userData.planExpiresAt - Date.now()) / (86400000)) <= 3 ? 'text-red-500' : 'text-green-600'}`}>
+                                    {Math.max(0, Math.ceil((userData.planExpiresAt - Date.now()) / (86400000)))} days left
+                                </span>
+                            </div>
+                        )}
                     </div>
                     {userData.plan !== 'ultra' && (
                         <button
