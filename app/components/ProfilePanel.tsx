@@ -94,8 +94,19 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
     return (
         <Modal title="My Profile" isOpen={isOpen} onClose={onClose}>
             <div className="flex flex-col items-center mb-6">
-                <div className="w-20 h-20 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-3xl font-bold mb-3 shadow-inner">
-                    {user.photoURL ? <Image src={user.photoURL} alt="User" width={80} height={80} className="rounded-full" /> : (user.displayName?.[0] || 'U')}
+                <div className={`relative rounded-full transition-transform mb-3 ${userData?.plan === 'ultra' ? 'p-[4px]' :
+                    userData?.plan === 'pro' ? 'p-[3px]' :
+                        'p-0 ring-4 ring-zinc-100 dark:ring-zinc-700'
+                    }`}>
+                    {/* Gradient Background */}
+                    {(userData?.plan === 'pro' || userData?.plan === 'ultra') && (
+                        <div className={`absolute inset-0 rounded-full animate-spin-slow bg-gradient-to-tr ${userData.plan === 'ultra' ? 'from-purple-600 via-fuchsia-400 to-amber-300' : 'from-yellow-300 via-amber-500 to-yellow-600'
+                            }`} />
+                    )}
+
+                    <div className="relative z-10 w-20 h-20 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-3xl font-bold shadow-inner overflow-hidden border-4 border-white dark:border-zinc-800">
+                        {user.photoURL ? <Image src={user.photoURL} alt="User" width={80} height={80} className="object-cover w-full h-full" /> : (user.displayName?.[0]?.toUpperCase() || 'U')}
+                    </div>
                 </div>
                 <div className="text-zinc-500 text-sm">{user.email}</div>
             </div>
@@ -224,7 +235,7 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
         setStatusMsg('Creating request...');
 
         try {
-            await createPaymentRequest(user.uid, {
+            await createPaymentRequest(user.uid, user.email, {
                 type: 'upgrade',
                 itemId: selectedPlan,
                 amount: settings.plans[selectedPlan],
@@ -391,7 +402,7 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
         setStatusMsg('Creating request...');
 
         try {
-            await createPaymentRequest(user.uid, {
+            await createPaymentRequest(user.uid, user.email, {
                 type: selectedItem.type,
                 itemId: selectedItem.label,
                 amount: selectedItem.price,

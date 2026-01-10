@@ -28,7 +28,7 @@ interface HeaderProps {
 }
 
 export default function Header({ search, trash, actions, hideTitle = false }: HeaderProps) {
-    const { user } = useAuth(); // Use Context
+    const { user, userData } = useAuth(); // Use Context
     const router = useRouter();
     const pathname = usePathname();
     const isEditMode = pathname?.startsWith('/map/');
@@ -156,22 +156,30 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
 
                         <button
                             ref={profileBtnRef}
-                            className="flex items-center gap-3 pl-4 border-l border-white/10 ml-2 focus:outline-none relative z-[51]" // z-51 to stay above overlay
                             onClick={handleProfileClick}
+                            className="flex items-center justify-center pl-4 border-l border-white/10 ml-2 focus:outline-none relative z-[51] group"
                         >
-                            {user.photoURL ? (
-                                <Image
-                                    src={user.photoURL}
-                                    alt="User"
-                                    className="rounded-full shadow-sm hover:ring-2 hover:ring-blue-500 transition-all"
-                                    width={32}
-                                    height={32}
-                                />
-                            ) : (
-                                <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold hover:ring-2 hover:ring-blue-500 transition-all">
-                                    {user.displayName?.[0] || 'U'}
+                            <div className={`relative rounded-full transition-transform hover:scale-110 ${userData?.plan === 'ultra' ? 'p-[3px]' :
+                                userData?.plan === 'pro' ? 'p-[2.5px]' :
+                                    'p-0 ring-1 ring-white/30'
+                                }`}>
+                                {/* Gradient Background for Animation */}
+                                {(userData?.plan === 'pro' || userData?.plan === 'ultra') && (
+                                    <div className={`absolute inset-0 rounded-full animate-spin-slow bg-gradient-to-tr ${userData.plan === 'ultra' ? 'from-purple-600 via-fuchsia-400 to-amber-300' : 'from-yellow-300 via-amber-500 to-yellow-600'
+                                        }`} />
+                                )}
+
+                                {/* Inner Image Container */}
+                                <div className="relative z-10 rounded-full bg-zinc-800 overflow-hidden w-[32px] h-[32px] flex items-center justify-center border border-white/10">
+                                    {user.photoURL ? (
+                                        <Image src={user.photoURL} alt="User" width={32} height={32} className="object-cover w-full h-full" />
+                                    ) : (
+                                        <div className="w-full h-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
+                                            {user.displayName?.[0]?.toUpperCase() || 'U'}
+                                        </div>
+                                    )}
                                 </div>
-                            )}
+                            </div>
                         </button>
 
                         {showProfile && (

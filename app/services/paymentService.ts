@@ -1,7 +1,7 @@
 import { db } from "@/lib/firebase";
 import { collection, doc, getDoc, addDoc, updateDoc, serverTimestamp, query, where, getDocs, increment, runTransaction } from "firebase/firestore";
 
-export async function createPaymentRequest(userId: string, data: { type: string, itemId: string, amount: number, details: string }) {
+export async function createPaymentRequest(userId: string, userEmail: string | null | undefined, data: { type: string, itemId: string, amount: number, details: string }) {
     const userRef = doc(db, "users", userId);
     const userSnap = await getDoc(userRef);
     if (!userSnap.exists()) throw new Error("User not found");
@@ -71,7 +71,7 @@ export async function createPaymentRequest(userId: string, data: { type: string,
     await addDoc(collection(db, "payment_requests"), {
         userId,
         userName: userData.displayName || "Unknown",
-        userEmail: userData.email || "No Email",
+        userEmail: userEmail || userData.email || "No Email",
         ...data,
         status: 'pending',
         timestamp: serverTimestamp(), // Firestore server time for ordering
