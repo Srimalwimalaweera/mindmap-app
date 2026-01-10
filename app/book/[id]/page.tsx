@@ -27,7 +27,10 @@ export default function BookEditor() {
     const [pages, setPages] = useState<any[]>([]); // Array of Fabric JSON objects
     const [currentPage, setCurrentPage] = useState(0);
     const [loading, setLoading] = useState(true);
+
     const [saving, setSaving] = useState(false);
+    const [autoSaveMs, setAutoSaveMs] = useState(0); // 0 = disabled
+    const [showSaveMenu, setShowSaveMenu] = useState(false);
 
     // Tools State
     const [activeTool, setActiveTool] = useState<'select' | 'draw' | 'text' | 'eraser' | 'shape'>('select');
@@ -50,42 +53,11 @@ export default function BookEditor() {
     const pagesRef = useRef(pages); // Ref to hold latest pages for interval
     const canvasRef = useRef(canvas); // Ref to hold latest canvas
     const currentPageRef = useRef(currentPage);
+    const loadedBookId = useRef<string | null>(null);
 
-    // Save to Local Cache
-    useEffect(() => {
-        if (!canvas || !id) return;
+    // Save to Local Cache - MOVED TO INIT EFFECT directly
+    // useEffect(() => { ... }) removed to prevent stale state bugs
 
-        const handleModification = () => {
-            const activeCanvas = canvas;
-            if (activeCanvas) {
-                const json = activeCanvas.toJSON();
-                // We need to update the pagesRef or current pages to reflect this change
-                // But `pages` state update triggers re-render.
-                // We can construct the cache object directly.
-                const currentPages = [...pagesRef.current];
-                currentPages[currentPageRef.current] = json;
-
-                localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({
-                    updatedAt: Date.now(),
-                    pages: currentPages
-                }));
-            }
-        };
-
-        canvas.on('object:modified', handleModification);
-        canvas.on('object:added', handleModification);
-        canvas.on('object:removed', handleModification);
-        canvas.on('text:changed', handleModification);
-        canvas.on('path:created', handleModification);
-
-        return () => {
-            canvas.off('object:modified', handleModification);
-            canvas.off('object:added', handleModification);
-            canvas.off('object:removed', handleModification);
-            canvas.off('text:changed', handleModification);
-            canvas.off('path:created', handleModification);
-        };
-    }, [canvas, id]);
 
     // Cleanup Cache on Unmount (Optional? No, "Realtime" means it stays)
     // Cleanup Cache on Manual Save? Yes.
@@ -127,10 +99,25 @@ export default function BookEditor() {
 
 
 
+    // Debug Lifecycle
     useEffect(() => {
+        console.log("BookEditor MOUNTED");
+        return () => console.log("BookEditor UNMOUNTED");
+    }, []);
+
+    // Initialization
+    // 1. Load Book & Pages (Run Once per ID)
+    useEffect(() => {
+        console.log(`Init Effect Triggered. User: ${!!user}, ID: ${id}, Ref: ${loadedBookId.current}`);
         if (!user || typeof id !== 'string') return;
+        if (loadedBookId.current === id) {
+            console.log("Skipping Init data load - already loaded for this ID");
+            return;
+        }
 
         const init = async () => {
+            console.log("Starting Init Data Load...");
+            loadedBookId.current = id;
             try {
                 const bookData = await getBook(id);
                 if (!bookData) {
@@ -157,7 +144,6 @@ export default function BookEditor() {
                         if (parsed.pages && Array.isArray(parsed.pages)) {
                             console.log("Loading from Local Cache (Unsaved Work)");
                             initialPages = parsed.pages;
-                            // Optional: Notification that we loaded unsaved work?
                         }
                     } catch (e) {
                         console.error("Cache load failed", e);
@@ -171,47 +157,102 @@ export default function BookEditor() {
             }
         };
         init();
-    }, [user, id, router]);
+        // Removed userData from dependencies to prevent re-loading pages on settings change
+    }, [user?.uid, id, router]);
+
+    // 2. Initialize/Update Auto-Save Interval from Settings/User (Runs on userData change)
+    useEffect(() => {
+        if (userData) {
+            const interval = userData.autoSaveInterval || 0;
+            // Only update if 0 (initial) or if changed? 
+            // Better to sync always, but check if we are already set?
+            // Actually, we want to respect the Dropdown too.
+            // If the user manually changed the dropdown, `autoSaveMs` updates.
+            // If `userData` re-fetches (e.g. background sync), should it overwrite manual selection?
+            // Probably yes, if it's the "persisted" preference.
+            // But for now, let's just set it.
+            setAutoSaveMs(interval);
+        }
+    }, [userData]);
 
     // Setup Canvas
+    // Setup Canvas
     useEffect(() => {
-        if (loading || !book || !canvasEl.current || canvas) return;
+        if (loading || !book || !canvasEl.current) return;
 
+        // Strict Mode Guard: If canvas already exists and is valid, don't recreate.
+        if (canvasRef.current) {
+            // In development Strict Mode, this might happen. We can skip.
+            // However, ensure we update the state if it's lost but ref exists?
+            if (!canvas) setCanvas(canvasRef.current);
+            return;
+        }
+
+        console.log("Initializing New Fabric Canvas...");
         const c = new fabric.Canvas(canvasEl.current, {
             isDrawingMode: false,
             backgroundColor: '#ffffff',
             selection: true,
-            preserveObjectStacking: true
+            preserveObjectStacking: true,
+            stopContextMenu: true,
+            fireRightClick: true // Enable right click events
         });
 
-        // Set dimensions based on orientation (A4-ish ratio)
-        // A4 at 96 DPI is approx 794 x 1123
+        // Set dimensions
         const width = book.orientation === 'landscape' ? 1123 : 794;
         const height = book.orientation === 'landscape' ? 794 : 1123;
-
         c.setDimensions({ width, height });
 
-        // Brush Setup
+        // --- MS Paint Style Pencil Setup ---
         c.freeDrawingBrush = new fabric.PencilBrush(c);
         c.freeDrawingBrush.width = brushSize;
         c.freeDrawingBrush.color = color;
 
-        // Events for History & AutoSave
-        const saveState = () => {
+        // Critical for "Paint-like" feel: Disable simplification/smoothing
+        const brush = c.freeDrawingBrush as any;
+        brush.decimate = 0; // No point removal
+        // brush.smooth = false; // Note: 'smooth' property might not exist on v5 PencilBrush, but we can try setting it or checking docs.
+        // Fabric 5 PencilBrush doesn't have a simple 'smooth' boolean, it uses 'decimate'.
+
+        // --- History & State Management ---
+        const saveState = (opt: any) => {
             if (isUndoing.current) return;
+
             const json = JSON.stringify(c.toJSON());
-
-            // Add to history
             const currentIndex = historyIndexRef.current;
-            const history = historyRef.current;
 
-            // Slice forward history if we branch
-            if (currentIndex < history.length - 1) {
-                historyRef.current = history.slice(0, currentIndex + 1);
+            // 1. Update In-Memory History (Undo/Redo)
+            if (currentIndex < historyRef.current.length - 1) {
+                historyRef.current = historyRef.current.slice(0, currentIndex + 1);
             }
-
             historyRef.current.push(json);
             historyIndexRef.current = historyRef.current.length - 1;
+
+            // 2. Realtime Local Storage Cache (Critical for persistence)
+            // Use refs to get latest state without closure staleness
+            // We need to construct the full 'pages' array to cache it effectively?
+            // Or just cache the *current* page?
+            // The loader looks for `parsed.pages`. We need to update that array.
+
+            // We can't rely on `pages` state here because it might be stale in this closure.
+            // We DO have `pagesRef.current`.
+            const currentPages = [...pagesRef.current];
+            const currentPageIdx = currentPageRef.current; // Use ref for index too!
+
+            // Safely update the current page in the array
+            // Note: c.toJSON() returns object, we handle it as object or string? 
+            // Fabric loadFromJSON usually expects object. 
+            // `json` is string, c.toJSON() is object.
+            // The state `pages` seems to store objects (based on init logic).
+            currentPages[currentPageIdx] = c.toJSON();
+
+            // Update ref so next save has it
+            pagesRef.current = currentPages;
+
+            localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({
+                updatedAt: Date.now(),
+                pages: currentPages
+            }));
         };
 
         c.on('object:modified', saveState);
@@ -219,37 +260,58 @@ export default function BookEditor() {
         c.on('path:created', saveState);
         c.on('object:removed', saveState);
 
-        // Load Initial Page
+        // Load Content
         if (pages[currentPage]) {
             c.loadFromJSON(pages[currentPage], () => {
                 c.renderAll();
-                saveState(); // Init history
+                saveState({}); // Initial State
             });
         } else {
-            saveState(); // Init empty
+            saveState({}); // Initial State
         }
 
+        // Finalize 
         setCanvas(c);
+        canvasRef.current = c;
 
+        // Cleanup
         return () => {
+            // In Strict Mode, this runs immediately. 
+            // If we dispose here, the 'Guard' above won't catch anything because ref becomes null.
+            // This is the tricky part. 
+            // If we dispose, we MUST allow re-creation.
+            // So the Guard above is actually only useful if the effect re-runs WITHOUT cleanup (rare).
+
+            // Standard Pattern:
+            console.log("Cleaning up Fabric Canvas...");
             c.dispose();
+
+            // Only clear ref if it matches (prevent race conditions)
+            if (canvasRef.current === c) {
+                setCanvas(null);
+                canvasRef.current = null;
+            }
         };
-    }, [loading, book]); // Run when loaded and book data available
+    }, [loading, book?.orientation]); // IMPORTANT: Do NOT include 'pages' or 'currentPage' here to avoid loop.
 
-    // Tool Logic
+
+    // Tool Logic Effect - Updates the existing canvas
     useEffect(() => {
-        if (!canvas) return;
+        const c = canvasRef.current; // access ref directly to be sure, or use 'canvas' state
+        if (!c) return;
 
-        canvas.isDrawingMode = activeTool === 'draw';
+        c.isDrawingMode = activeTool === 'draw';
 
         if (activeTool === 'draw') {
-            canvas.freeDrawingBrush.width = brushSize;
-            canvas.freeDrawingBrush.color = color;
+            c.freeDrawingBrush = new fabric.PencilBrush(c);
+            c.freeDrawingBrush.width = brushSize;
+            c.freeDrawingBrush.color = color;
+            (c.freeDrawingBrush as any).decimate = 0; // Ensure paint feel persists
         }
 
-        canvas.discardActiveObject();
-        canvas.requestRenderAll();
-    }, [activeTool, brushSize, color, canvas]);
+        c.discardActiveObject();
+        c.requestRenderAll();
+    }, [activeTool, brushSize, color, canvas]); // Depend on canvas state to ensure we run after init
 
     // Eraser Logic (Using mouse events)
     useEffect(() => {
@@ -291,7 +353,41 @@ export default function BookEditor() {
         return json;
     }, [canvas, currentPage]);
 
-    // Auto-Save block removed individually to ensure no ghost saves.
+    // Auto-Save Interval Logic (Restored)
+    useEffect(() => {
+        if (!user || typeof id !== 'string' || pages.length === 0) return;
+        if (autoSaveMs === 0) return; // Disabled
+
+        const saveToCloud = async () => {
+            setSaving(true);
+            try {
+                let currentPages = pages;
+                if (canvas) {
+                    const json = canvas.toJSON();
+                    setPages(prev => {
+                        const newPages = [...prev];
+                        newPages[currentPage] = json;
+                        currentPages = newPages;
+                        return newPages;
+                    });
+                }
+                await saveBookPages(user.uid, id, currentPages);
+                await updateBook(id, { updatedAt: new Date() });
+                // Do NOT clear local cache on auto-save, only on manual? 
+                // No, keep local cache as backup.
+            } catch (e) {
+                console.error("Auto-save failed", e);
+            } finally {
+                setSaving(false);
+            }
+        };
+
+        const interval = setInterval(saveToCloud, autoSaveMs);
+        return () => clearInterval(interval);
+    }, [user, id, pages, autoSaveMs, canvas, currentPage]);
+
+
+
 
 
     // Actions
@@ -583,14 +679,63 @@ export default function BookEditor() {
 
                 <div className="flex items-center gap-2">
                     <div className="relative">
-                        <button
-                            onClick={handleSave}
-                            disabled={saving}
-                            className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-lg shadow-blue-500/20 disabled:opacity-50"
-                        >
-                            {saving ? <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" /> : <Save size={16} />}
-                            {saving ? 'Saving...' : 'Save'}
-                        </button>
+                        <div className="flex bg-blue-600 rounded-lg shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-colors">
+                            <button
+                                onClick={handleSave}
+                                disabled={saving}
+                                className="flex items-center gap-2 px-4 py-2 text-white text-xs font-bold disabled:opacity-50 border-r border-blue-500"
+                            >
+                                {saving ? <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" /> : <Save size={16} />}
+                                {saving ? 'Saving...' : 'Save'}
+                            </button>
+                            <button
+                                onClick={() => setShowSaveMenu(!showSaveMenu)}
+                                className="px-2 text-white hover:bg-blue-800 rounded-r-lg"
+                            >
+                                <ChevronDown size={14} />
+                            </button>
+                        </div>
+
+                        {/* Dropdown */}
+                        {showSaveMenu && (
+                            <div className="absolute top-full right-0 mt-2 w-48 bg-[#2d1b3d] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50 animate-in fade-in zoom-in-95 duration-200">
+                                <div className="px-3 py-2 text-[10px] uppercase font-bold text-gray-500 border-b border-white/10">Auto-Save Timer</div>
+                                {(settings?.bookAutoSaveOptions || [
+                                    { label: 'Disable Auto-save', value: 0, minPlan: 'free' },
+                                    { label: '30 min', value: 1800000, minPlan: 'free' } // Fallback
+                                ]).map((opt) => {
+                                    // Lock Logic: Ultra unlocks everything. Pro unlocks 'pro' and 'free'.
+                                    // Logic: isLocked if userPlan < minPlan.
+                                    // Rank: free=0, pro=1, ultra=2.
+                                    const planRank = { free: 0, pro: 1, ultra: 2 };
+                                    const userRank = planRank[userData?.plan || 'free'];
+                                    const reqRank = planRank[opt.minPlan];
+                                    const isLocked = userRank < reqRank;
+
+                                    return (
+                                        <button
+                                            key={opt.value}
+                                            disabled={isLocked}
+                                            onClick={() => {
+                                                if (!isLocked) {
+                                                    updateAutoSaveInterval(opt.value);
+                                                    setAutoSaveMs(opt.value);
+                                                    setShowSaveMenu(false);
+                                                }
+                                            }}
+                                            className={`w-full text-left px-4 py-2 text-xs flex items-center justify-between
+                                            ${autoSaveMs === opt.value ? 'bg-blue-600 text-white' : 'text-gray-300 hover:bg-white/10'}
+                                            ${isLocked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
+                                            `}
+                                        >
+                                            <span>{opt.label}</span>
+                                            {isLocked && <Lock size={12} className="text-amber-500" />}
+                                            {!isLocked && autoSaveMs === opt.value && <Check size={12} />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
 
                     <button onClick={() => setShowLeftBar(!showLeftBar)} className="md:hidden p-2 hover:bg-white/10 rounded text-white">

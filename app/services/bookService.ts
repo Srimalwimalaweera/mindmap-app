@@ -51,8 +51,8 @@ export const getBook = async (bookId: string): Promise<BookData | null> => {
 
 export const updateBook = async (bookId: string, data: Partial<BookData>) => {
     const docRef = doc(db, COLLECTION_NAME, bookId);
-    // Removed `updatedAt: serverTimestamp()` as per user request to stop persistent updates
-    await updateDoc(docRef, { ...data });
+    await updateDoc(docRef, { ...data, updatedAt: serverTimestamp() });
+
 };
 
 export const saveBookPages = async (uid: string, bookId: string, pages: any[]) => {
