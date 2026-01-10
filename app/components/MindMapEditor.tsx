@@ -81,19 +81,17 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
             // Check for Ctrl+Z / Cmd+Z
             if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
                 if (e.shiftKey) {
-                    // Redo (Ctrl+Shift+Z)
-                    e.preventDefault();
                     onRedo?.();
                 } else {
-                    // Undo (Ctrl+Z)
-                    e.preventDefault();
                     onUndo?.();
                 }
-            }
-            // Check for Ctrl+Y / Cmd+Y (Redo alternate)
-            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
                 e.preventDefault();
+            }
+
+            // Check for Ctrl+Y / Cmd+Y
+            if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
                 onRedo?.();
+                e.preventDefault();
             }
         };
 

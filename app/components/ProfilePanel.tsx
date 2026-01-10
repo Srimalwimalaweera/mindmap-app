@@ -346,6 +346,11 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                             <div className="flex justify-between"><span className="text-zinc-500">Acc No:</span> <span className="font-bold dark:text-white tracking-widest">{settings.bankDetails.accountNumber}</span></div>
                             <div className="flex justify-between"><span className="text-zinc-500">Name:</span> <span className="font-bold dark:text-white">{settings.bankDetails.accountHolder}</span></div>
                         </div>
+
+                        <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 rounded-lg text-center text-red-600 dark:text-red-400 text-sm font-bold space-y-2">
+                            <p>IMPORTANT: Please send your Payment Slip and Email Address to our WhatsApp.</p>
+                            <p>වැදගත්: කරුණාකර ඔබගේ ගෙවීම් පත (Payment Slip) සහ ඔබගේ Email ලිපිනය අපගේ WhatsApp අංකයට එවන්න.</p>
+                        </div>
                     </div>
 
                     <button
@@ -514,6 +519,11 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                             <div className="flex justify-between"><span className="text-zinc-500">Branch:</span> <span className="font-bold dark:text-white">{settings.bankDetails.branch}</span></div>
                             <div className="flex justify-between"><span className="text-zinc-500">Acc No:</span> <span className="font-bold dark:text-white tracking-widest">{settings.bankDetails.accountNumber}</span></div>
                             <div className="flex justify-between"><span className="text-zinc-500">Name:</span> <span className="font-bold dark:text-white">{settings.bankDetails.accountHolder}</span></div>
+                        </div>
+
+                        <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/10 border border-red-100 dark:border-red-900/30 rounded-lg text-center text-red-600 dark:text-red-400 text-sm font-bold space-y-2">
+                            <p>IMPORTANT: Please send your Payment Slip and Email Address to our WhatsApp.</p>
+                            <p>වැදගත්: කරුණාකර ඔබගේ ගෙවීම් පත (Payment Slip) සහ ඔබගේ Email ලිපිනය අපගේ WhatsApp අංකයට එවන්න.</p>
                         </div>
                     </div>
 
