@@ -182,6 +182,13 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
                 <div className="pt-4 border-t border-zinc-100 dark:border-zinc-700 space-y-2">
                     <button onClick={handleResetPassword} className="w-full text-left text-sm text-blue-500 hover:underline">Change Password (Reset Email)</button>
                 </div>
+
+                <div className="mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-700 flex flex-wrap justify-center gap-x-4 gap-y-2 text-xs text-zinc-400 dark:text-zinc-500">
+                    <a href="/terms" className="hover:text-blue-500 hover:underline transition-colors">Terms & Conditions</a>
+                    <a href="/privacy" className="hover:text-blue-500 hover:underline transition-colors">Privacy Policy</a>
+                    <a href="/about" className="hover:text-blue-500 hover:underline transition-colors">About</a>
+                    <a href="/docs" className="hover:text-blue-500 hover:underline transition-colors">Docs</a>
+                </div>
             </div>
             {msg && <div className="mt-4 text-sm text-center text-green-500 font-medium">{msg}</div>}
         </Modal>
