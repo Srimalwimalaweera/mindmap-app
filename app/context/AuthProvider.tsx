@@ -90,13 +90,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // 1. Fetch System Settings (Run once)
     const fetchSettings = useCallback(async (force: boolean = false) => {
         try {
-            // Check Cache (24 hours) - Skip if forced
+            // Check Cache (7 days) - Skip if forced
             if (!force) {
                 const cached = localStorage.getItem('appSettings');
                 const cacheTime = localStorage.getItem('appSettingsTime');
                 if (cached && cacheTime) {
                     const age = Date.now() - parseInt(cacheTime);
-                    if (age < 24 * 60 * 60 * 1000) {
+                    if (age < 7 * 24 * 60 * 60 * 1000) { // 7 Days
                         setSettings(JSON.parse(cached));
                         return;
                     }
@@ -106,7 +106,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const plansDoc = await getDoc(doc(db, 'settings', 'plans'));
             const pinsDoc = await getDoc(doc(db, 'settings', 'pin_settings'));
             const limitsDoc = await getDoc(doc(db, 'settings', 'default_project_limit'));
-            const autoSaveDoc = await getDoc(doc(db, 'settings', 'auto_saving_times'));
+            // Fetch book_autosave_times instead of old auto_saving_times
+            const autoSaveDoc = await getDoc(doc(db, 'settings', 'book_autosave_times'));
 
             const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
             const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins'));
@@ -114,16 +115,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const systemDoc = await getDoc(doc(db, 'settings', 'system'));
 
             // Helper to format Duration
-            const fmtDuration = (sec: number) => {
-                if (sec < 60) return `${sec} sec`;
-                return `${Math.floor(sec / 60)} min`;
+            const fmtDuration = (val: number | string) => {
+                if (val === 'desable' || val === 0) return 'Disable Auto-save';
+                const sec = Number(val);
+                if (sec < 60) return `${sec} min`; // Screenshot shows 10, 15, 20, 30 which are likely minutes based on request context ("20 min")
+                return `${Math.floor(sec / 60)} hr`;
             };
 
             // Helper to map plan for autosave
-            const getMinPlan = (sec: number): 'free' | 'pro' | 'ultra' => {
-                if (sec >= 1200) return 'free'; // 20m+
-                if (sec >= 300) return 'pro';   // 5m+
-                return 'ultra';                 // <5m
+            const getMinPlan = (val: number | string): 'free' | 'pro' | 'ultra' => {
+                if (val === 'desable' || val === 0) return 'free';
+                const min = Number(val);
+                if (min >= 20) return 'pro';  // 20, 30 mins
+                return 'ultra';               // 10, 15 mins
             };
 
             const parsedSettings: AppSettings = {
@@ -154,14 +158,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 maintenanceMode: systemDoc.exists() ? systemDoc.data()?.maintenanceMode || false : false
             };
 
-            // Parse Auto/Save Times
+            // Parse Auto/Save Times from book_autosave_times
             if (autoSaveDoc.exists()) {
-                const values = Object.values(autoSaveDoc.data()).map(v => Number(v)).sort((a, b) => a - b);
-                parsedSettings.autoSaveOptions = values.map(val => ({
-                    label: fmtDuration(val),
-                    value: val * 1000,
-                    minPlan: getMinPlan(val)
-                }));
+                const data = autoSaveDoc.data();
+                const options: any[] = [];
+
+                // The screenshot shows keys 1, 2, 3... and values "desable", 10, 15...
+                Object.values(data).forEach((val: any) => {
+                    const isDisable = val === 'desable';
+                    const minutes = isDisable ? 0 : Number(val);
+
+                    options.push({
+                        label: isDisable ? 'Disable Auto-save' : `${minutes} min`,
+                        value: isDisable ? 0 : minutes * 60 * 1000, // Convert min to ms
+                        minPlan: getMinPlan(isDisable ? 'desable' : minutes)
+                    });
+                });
+
+                // Sort: Disable (0) first, then by time ascending (or descending? Request said dropdown options order... doesn't specify sort. Usually Disable first, then fastest to slowest or vice versa.)
+                // Let's sort by value ascending (0, 10, 15, 20, 30).
+                parsedSettings.autoSaveOptions = options.sort((a, b) => a.value - b.value);
             }
 
             // Parse Add Project Slots

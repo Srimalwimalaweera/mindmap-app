@@ -354,7 +354,13 @@ export default function Dashboard() {
           {activeMaps.map((map) => (
             <div
               key={map.id}
-              onClick={() => router.push(`/map/${map.id}`)}
+              onClick={() => {
+                if (map.type === 'book') {
+                  router.push(`/book/${map.id}`);
+                } else {
+                  router.push(`/map/${map.id}`);
+                }
+              }}
               className="group relative flex flex-col h-48 bg-white/5 backdrop-blur-md rounded-[30px] shadow-[0_20px_60px_rgba(0,0,0,0.4)] hover:shadow-[0_20px_60px_rgba(0,0,0,0.6)] border border-white/10 hover:border-white/20 overflow-hidden cursor-pointer transition-all hover:-translate-y-1"
             >
               {/* Pin & Trash Buttons */}

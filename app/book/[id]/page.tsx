@@ -9,14 +9,15 @@ import {
     Pencil, Type, Eraser, MousePointer2, Image as ImageIcon, Download,
     ChevronLeft, ChevronRight, Save, Ruler, Circle, Square, Minus,
     Undo, Redo, ZoomIn, ZoomOut, Maximize, FileDown, Menu, X, Check,
-    Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight
+    Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight,
+    Clock, Lock, ChevronDown
 } from 'lucide-react';
 
 export const runtime = 'edge';
 
 export default function BookEditor() {
     const { id } = useParams();
-    const { user, settings } = useAuth();
+    const { user, userData, settings, updateAutoSaveInterval } = useAuth();
     const router = useRouter();
 
     // Canvas & Book State
@@ -40,7 +41,90 @@ export default function BookEditor() {
     const historyIndexRef = useRef(-1);
     const isUndoing = useRef(false);
 
-    // Initialization
+
+
+    // Auto-Save State
+    const [autoSaveMs, setAutoSaveMs] = useState(0);
+    const [showSaveMenu, setShowSaveMenu] = useState(false);
+    const pagesRef = useRef(pages); // Ref to hold latest pages for interval
+    const canvasRef = useRef(canvas); // Ref to hold latest canvas
+    const currentPageRef = useRef(currentPage);
+
+    // Sync Refs
+    useEffect(() => { pagesRef.current = pages; }, [pages]);
+    useEffect(() => { canvasRef.current = canvas; }, [canvas]);
+    useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
+
+    // Initialize Auto-Save from User Data
+    useEffect(() => {
+        if (userData?.autoSaveInterval !== undefined) {
+            setAutoSaveMs(userData.autoSaveInterval);
+        }
+    }, [userData?.autoSaveInterval]);
+
+    const handleSave = useCallback(async (isAuto = false) => {
+        if (!user || typeof id !== 'string') return;
+        setSaving(true);
+        try {
+            let pgs = [...pagesRef.current];
+            const activeCanvas = canvasRef.current;
+            if (activeCanvas) {
+                // If we are auto-saving, we might be on a different page than the ref if fast switching?
+                // But `canvasRef` should match `currentPageRef`.
+                pgs[currentPageRef.current] = activeCanvas.toJSON();
+                // We update state quietly to keep in sync without re-rendering everything if possible
+                // But React state needs to be updated.
+                // If manual save, we definitely update state.
+            }
+            // Update pages state (optional but good for consistency)
+            // setPages(pgs); // Causes re-render. Maybe skip if auto-save?
+
+            await saveBookPages(user.uid, id, pgs);
+            const now = new Date();
+            await updateBook(id, { updatedAt: now });
+            setBook(prev => prev ? { ...prev, updatedAt: now } : null);
+            if (!isAuto) {
+                // alert("Saved!"); // Optional feedback
+            }
+        } catch (e) {
+            console.error("Save failed", e);
+            if (!isAuto) alert("Save failed");
+        } finally {
+            setSaving(false);
+        }
+    }, [user, id]);
+
+    // Auto-Save Interval
+    useEffect(() => {
+        if (autoSaveMs <= 0) return;
+        const interval = setInterval(() => {
+            handleSave(true);
+        }, autoSaveMs);
+        return () => clearInterval(interval);
+    }, [autoSaveMs, handleSave]);
+
+    const handleSetAutoSave = async (option: any) => {
+        const { minPlan, value } = option;
+        const currentPlan = userData?.plan || 'free';
+
+        // Check Logic
+        // Hierarchy: free < pro < ultra
+        const levels = { 'free': 0, 'pro': 1, 'ultra': 2 };
+
+        if (levels[currentPlan as keyof typeof levels] < levels[minPlan as keyof typeof levels]) {
+            alert(`Feature limited to ${minPlan.toUpperCase()} users. Please upgrade.`);
+            // Custom modal logic can replace this alert
+            return;
+        }
+
+        try {
+            setAutoSaveMs(value);
+            await updateAutoSaveInterval(value);
+            setShowSaveMenu(false);
+        } catch (e) {
+            console.error(e);
+        }
+    };
     useEffect(() => {
         if (!user || typeof id !== 'string') return;
 
@@ -70,24 +154,21 @@ export default function BookEditor() {
 
     // Setup Canvas
     useEffect(() => {
-        if (loading || !canvasEl.current || canvas) return;
+        if (loading || !book || !canvasEl.current || canvas) return;
 
         const c = new fabric.Canvas(canvasEl.current, {
             isDrawingMode: false,
             backgroundColor: '#ffffff',
-            selection: true
+            selection: true,
+            preserveObjectStacking: true
         });
 
-        // Responsive Sizing
-        const resize = () => {
-            const toolbarWidth = window.innerWidth > 768 && showLeftBar ? 64 : 0;
-            c.setDimensions({
-                width: window.innerWidth - toolbarWidth,
-                height: window.innerHeight - 110 // Top + Bottom bars
-            });
-        };
-        window.addEventListener('resize', resize);
-        resize();
+        // Set dimensions based on orientation (A4-ish ratio)
+        // A4 at 96 DPI is approx 794 x 1123
+        const width = book.orientation === 'landscape' ? 1123 : 794;
+        const height = book.orientation === 'landscape' ? 794 : 1123;
+
+        c.setDimensions({ width, height });
 
         // Brush Setup
         c.freeDrawingBrush = new fabric.PencilBrush(c);
@@ -130,10 +211,9 @@ export default function BookEditor() {
         setCanvas(c);
 
         return () => {
-            window.removeEventListener('resize', resize);
             c.dispose();
         };
-    }, [loading]); // Run once when loaded
+    }, [loading, book]); // Run when loaded and book data available
 
     // Tool Logic
     useEffect(() => {
@@ -394,136 +474,248 @@ export default function BookEditor() {
         });
     };
 
-    if (loading) return <div className="flex h-screen items-center justify-center bg-zinc-900 text-white"><div className="animate-spin mr-2">C</div> Loading...</div>;
+    // Zoom & Pan State
+    const [zoom, setZoom] = useState(1);
+    const workspaceRef = useRef<HTMLDivElement>(null);
+    const isPanning = useRef(false);
+    const lastMousePos = useRef({ x: 0, y: 0 });
+
+    // Zoom & Pan Logic
+    useEffect(() => {
+        // Prevent default browser zoom globally
+        const handleWheel = (e: WheelEvent) => {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+
+                // Only zoom if mouse is over the workspace or canvas
+                // This allows the user to still use browser zoom if they REALLY want to (e.g. over the URL bar? No events there).
+                // Actually, let's just zoom the canvas globally as requested to "turn off browser short cut".
+
+                const delta = e.deltaY * -0.002;
+                setZoom(prev => {
+                    const newZoom = Math.min(Math.max(prev + delta, 0.1), 5);
+                    return newZoom;
+                });
+            }
+        };
+
+        const handleMouseDown = (e: MouseEvent) => {
+            if (e.button === 2) { // Right Click
+                isPanning.current = true;
+                lastMousePos.current = { x: e.clientX, y: e.clientY };
+                if (workspaceRef.current) workspaceRef.current.style.cursor = 'grabbing';
+            }
+        };
+
+        const handleMouseMove = (e: MouseEvent) => {
+            if (!isPanning.current || !workspaceRef.current) return;
+            e.preventDefault();
+            const dx = e.clientX - lastMousePos.current.x;
+            const dy = e.clientY - lastMousePos.current.y;
+
+            workspaceRef.current.scrollLeft -= dx;
+            workspaceRef.current.scrollTop -= dy;
+
+            lastMousePos.current = { x: e.clientX, y: e.clientY };
+        };
+
+        const handleMouseUp = () => {
+            isPanning.current = false;
+            if (workspaceRef.current) workspaceRef.current.style.cursor = 'default';
+        };
+
+        const handleContextMenu = (e: MouseEvent) => {
+            // Only prevent context menu on the workspace/canvas to allow standard menu on UI if needed
+            if (workspaceRef.current && workspaceRef.current.contains(e.target as Node)) {
+                e.preventDefault();
+            }
+        };
+
+        // Attach listeners
+        window.addEventListener('wheel', handleWheel, { passive: false });
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        // Note: Context menu often bubbles, so window listener is safer for blocking
+        window.addEventListener('contextmenu', handleContextMenu);
+        window.addEventListener('mousedown', handleMouseDown);
+
+        return () => {
+            window.removeEventListener('wheel', handleWheel);
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('contextmenu', handleContextMenu);
+            window.removeEventListener('mousedown', handleMouseDown);
+        };
+    }, []);
+
+    if (loading) return <div className="flex h-screen items-center justify-center bg-[#1e1e2e] text-white"><div className="animate-spin mr-2">C</div> Loading...</div>;
 
     return (
-        <div className="flex flex-col h-screen bg-zinc-100 overflow-hidden">
+        <div className="flex flex-col h-screen bg-[linear-gradient(135deg,#1e1e2e_0%,#2d1b3d_100%)] overflow-hidden text-white">
             {/* Top Bar */}
-            <div className="bg-white border-b border-zinc-200 h-14 flex items-center px-4 justify-between shadow-sm z-20">
+            <div className="bg-white/10 backdrop-blur-md border-b border-white/10 h-14 flex items-center px-4 justify-between shadow-sm z-20">
                 <div className="flex items-center gap-4">
-                    <button onClick={() => router.push('/')} className="p-2 hover:bg-zinc-100 rounded-full">
-                        <ChevronLeft className="text-zinc-600" />
+                    <button onClick={() => router.push('/')} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                        <ChevronLeft className="text-white" />
                     </button>
-                    <h1 className="font-bold text-zinc-800">{book?.title}</h1>
+                    <h1 className="font-bold text-white">{book?.title}</h1>
                 </div>
 
                 <div className="flex items-center gap-2 overflow-x-auto no-scrollbar max-w-[50vw]">
                     {/* Style Tools */}
-                    <div className="h-8 w-[1px] bg-zinc-200 mx-2"></div>
-                    <button onClick={() => applyStyle('bold')} className="p-2 hover:bg-zinc-100 rounded" title="Bold"><Bold size={18} /></button>
-                    <button onClick={() => applyStyle('italic')} className="p-2 hover:bg-zinc-100 rounded" title="Italic"><Italic size={18} /></button>
-                    <button onClick={() => applyStyle('underline')} className="p-2 hover:bg-zinc-100 rounded" title="Underline"><Underline size={18} /></button>
-                    <div className="h-8 w-[1px] bg-zinc-200 mx-2"></div>
+                    <div className="h-8 w-[1px] bg-white/20 mx-2"></div>
+                    <button onClick={() => applyStyle('bold')} className="p-2 hover:bg-white/10 rounded text-gray-200 hover:text-white" title="Bold"><Bold size={18} /></button>
+                    <button onClick={() => applyStyle('italic')} className="p-2 hover:bg-white/10 rounded text-gray-200 hover:text-white" title="Italic"><Italic size={18} /></button>
+                    <button onClick={() => applyStyle('underline')} className="p-2 hover:bg-white/10 rounded text-gray-200 hover:text-white" title="Underline"><Underline size={18} /></button>
+                    <div className="h-8 w-[1px] bg-white/20 mx-2"></div>
 
                     {/* Color Picker */}
                     <input
                         type="color"
                         value={color}
                         onChange={(e) => setColor(e.target.value)}
-                        className="w-8 h-8 rounded cursor-pointer border-none"
+                        className="w-8 h-8 rounded cursor-pointer border-none bg-transparent"
                         title="Text/Brush Color"
                     />
-                    <div className="h-8 w-[1px] bg-zinc-200 mx-2"></div>
+                    <div className="h-8 w-[1px] bg-white/20 mx-2"></div>
 
                     {/* Brush Size */}
-                    <div className="flex items-center gap-2">
-                        <span className="text-xs text-zinc-500">Size</span>
+                    <div className="flex items-center gap-2 text-gray-200">
+                        <span className="text-xs">Size</span>
                         <input
                             type="range" min="1" max="20"
                             value={brushSize}
                             onChange={(e) => setBrushSize(parseInt(e.target.value))}
-                            className="w-24 h-2 bg-zinc-200 rounded-lg appearance-none cursor-pointer"
+                            className="w-24 h-2 bg-white/20 rounded-lg appearance-none cursor-pointer accent-blue-500"
                         />
-                        <span className="text-xs font-mono">{brushSize}</span>
+                        <span className="text-xs font-mono w-4">{brushSize}</span>
                     </div>
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => {
-                            // Manual save trigger
-                            const save = async () => {
-                                setSaving(true);
-                                try {
-                                    let currentPages = pages;
-                                    if (canvas) {
-                                        const json = canvas.toJSON();
-                                        setPages(prev => {
-                                            const newPages = [...prev];
-                                            newPages[currentPage] = json;
-                                            currentPages = newPages; // Local var for immediate use
-                                            return newPages;
-                                        });
-                                    }
-                                    if (user && typeof id === 'string') {
-                                        await saveBookPages(user.uid, id, currentPages);
-                                        await updateBook(id, { updatedAt: new Date() });
-                                    }
-                                } catch (e) {
-                                    console.error("Save failed", e);
-                                    alert("Save failed");
-                                } finally {
-                                    setSaving(false);
-                                }
-                            };
-                            save();
-                        }}
-                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-lg hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors text-xs font-bold"
-                    >
-                        {saving ? <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" /> : <Save size={14} />}
-                        {saving ? 'Saving...' : 'Save Changes'}
-                    </button>
+                    <div className="relative">
+                        <div className="flex items-center bg-blue-600 rounded-lg shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-colors">
+                            <button
+                                onClick={() => handleSave(false)}
+                                className="flex items-center gap-2 px-3 py-1.5 text-white text-xs font-bold border-r border-blue-500 hover:bg-blue-800/20 rounded-l-lg"
+                            >
+                                {saving ? <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" /> : <Save size={14} />}
+                                {saving ? 'Saving' : 'Save'}
+                            </button>
+                            <button
+                                onClick={() => setShowSaveMenu(!showSaveMenu)}
+                                className="px-1.5 py-1.5 text-white hover:bg-blue-800/20 rounded-r-lg"
+                            >
+                                {autoSaveMs > 0 ? <Clock size={14} className="animate-pulse" /> : <ChevronDown size={14} />}
+                            </button>
+                        </div>
 
-                    <button onClick={() => setShowLeftBar(!showLeftBar)} className="md:hidden p-2 hover:bg-zinc-100 rounded">
+                        {/* Dropdown Menu */}
+                        {showSaveMenu && (
+                            <div className="absolute top-full right-0 mt-2 w-48 bg-[#1e1e2e] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50 backdrop-blur-xl">
+                                <div className="px-3 py-2 text-xs font-bold text-gray-400 border-b border-white/10">
+                                    Auto-Save Settings
+                                </div>
+                                <div className="py-1">
+                                    {(settings?.autoSaveOptions || [
+                                        { label: 'Disable Auto-save', value: 0, minPlan: 'free' },
+                                        { label: '30 min', value: 1800000, minPlan: 'pro' },
+                                        { label: '20 min', value: 1200000, minPlan: 'pro' },
+                                        { label: '15 min', value: 900000, minPlan: 'ultra' },
+                                        { label: '10 min', value: 600000, minPlan: 'ultra' },
+                                    ]).map((opt: any, i) => (
+                                        <button
+                                            key={i}
+                                            onClick={() => handleSetAutoSave(opt)}
+                                            className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-white/10 transition-colors ${autoSaveMs === opt.value ? 'bg-blue-500/20 text-blue-400' : 'text-gray-200'}`}
+                                        >
+                                            <span className="flex items-center gap-2">
+                                                {autoSaveMs === opt.value && <Check size={12} />}
+                                                {opt.label}
+                                            </span>
+                                            {/* Lock Icon for permissions */}
+                                            {userData?.plan === 'free' && opt.minPlan !== 'free' && <Lock size={10} className="text-gray-500" />}
+                                            {userData?.plan === 'pro' && opt.minPlan === 'ultra' && <Lock size={10} className="text-gray-500" />}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    <button onClick={() => setShowLeftBar(!showLeftBar)} className="md:hidden p-2 hover:bg-white/10 rounded text-white">
                         {showLeftBar ? <X size={20} /> : <Menu size={20} />}
                     </button>
                 </div>
             </div>
 
-            <div className="flex flex-1 relative bg-zinc-200 overflow-hidden" id="workspace">
+            <div className="flex flex-1 relative bg-transparent overflow-hidden">
                 {/* Left Toolbar */}
-                <div className={`absolute md:relative left-0 top-0 bottom-0 w-16 bg-white border-r border-zinc-200 z-10 flex flex-col items-center py-4 gap-4 transition-transform ${showLeftBar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
+                <div className={`absolute md:relative left-0 top-0 bottom-0 w-16 bg-white/5 backdrop-blur-md border-r border-white/10 z-10 flex flex-col items-center py-4 gap-4 transition-transform ${showLeftBar ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
                     <ToolButton icon={<MousePointer2 />} active={activeTool === 'select'} onClick={() => setActiveTool('select')} tooltip="Select" />
                     <ToolButton icon={<Pencil />} active={activeTool === 'draw'} onClick={() => setActiveTool('draw')} tooltip="Draw (Free)" />
                     <ToolButton icon={<Type />} active={activeTool === 'text'} onClick={handleAddText} tooltip="Add Text" />
 
-                    <div className="h-[1px] w-8 bg-zinc-200 my-1"></div>
+                    <div className="h-[1px] w-8 bg-white/20 my-1"></div>
 
                     {/* Shapes */}
                     <ToolButton icon={<Square />} onClick={() => handleAddShape('rect')} tooltip="Rectangle" />
                     <ToolButton icon={<Circle />} onClick={() => handleAddShape('circle')} tooltip="Circle" />
                     <ToolButton icon={<Minus className="rotate-45" />} onClick={() => handleAddShape('line')} tooltip="Line" />
 
-                    <div className="h-[1px] w-8 bg-zinc-200 my-1"></div>
+                    <div className="h-[1px] w-8 bg-white/20 my-1"></div>
 
                     <ToolButton icon={<Eraser />} active={activeTool === 'eraser'} onClick={() => setActiveTool('eraser')} tooltip="Eraser (Beta)" />
                 </div>
 
                 {/* Canvas Area */}
-                <div className="flex-1 relative overflow-auto flex items-center justify-center bg-zinc-100">
-                    <canvas ref={canvasEl} className="shadow-lg bg-white" />
+                <div
+                    ref={workspaceRef}
+                    id="workspace"
+                    className="flex-1 relative overflow-auto flex items-center justify-center p-8 active:cursor-grabbing [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-white/40 [&::-webkit-scrollbar-track]:bg-transparent"
+                    style={{ backgroundImage: 'radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px)', backgroundSize: '20px 20px' }}
+                >
+                    <div
+                        style={{
+                            transform: `scale(${zoom})`,
+                            transformOrigin: 'center',
+                            transition: isPanning.current ? 'none' : 'transform 0.1s ease-out'
+                        }}
+                        className="shadow-2xl shadow-black/50"
+                    >
+                        <canvas ref={canvasEl} className="bg-white" />
+
+                        {/* Metadata Overlays */}
+                        <div className="absolute bottom-3 left-4 text-[10px] text-gray-400 font-mono pointer-events-none select-none z-10">
+                            Last updated: {book?.updatedAt ? new Date(book.updatedAt).toLocaleDateString() + ' ' + new Date(book.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never'}
+                        </div>
+                        <div className="absolute bottom-3 right-4 text-[10px] text-gray-400 font-mono pointer-events-none select-none z-10">
+                            Page {currentPage + 1}
+                        </div>
+                    </div>
                 </div>
             </div>
 
             {/* Bottom Bar */}
-            <div className="bg-white border-t border-zinc-200 h-14 flex items-center px-4 justify-between z-20">
+            <div className="bg-white/10 backdrop-blur-md border-t border-white/10 h-14 flex items-center px-4 justify-between z-20">
                 <div className="flex items-center gap-2">
-                    <button onClick={handleUndo} className="p-2 hover:bg-zinc-100 rounded text-zinc-600" title="Undo"><Undo size={20} /></button>
-                    {/* Redo is tricky with simple stack, omitted for MVP or need future stack */}
-                    {/* <button className="p-2 hover:bg-zinc-100 rounded text-zinc-600" title="Redo"><Redo size={20} /></button> */}
+                    <button onClick={handleUndo} className="p-2 hover:bg-white/10 rounded text-gray-200" title="Undo"><Undo size={20} /></button>
                 </div>
 
-                <div className="flex items-center gap-4 bg-zinc-100 px-4 py-1.5 rounded-full">
-                    <button onClick={() => changePage(-1)} disabled={currentPage === 0} className="p-1 hover:bg-zinc-200 rounded disabled:opacity-30"><ChevronLeft size={20} /></button>
-                    <span className="text-sm font-medium">Page {currentPage + 1} / {pages.length}</span>
-                    <button onClick={() => changePage(1)} className="p-1 hover:bg-zinc-200 rounded" disabled={currentPage >= pages.length - 1 && pages.length > 0 && false}><ChevronRight size={20} /></button>
-                    <div className="w-[1px] h-4 bg-zinc-300 mx-1"></div>
-                    <button onClick={addNewPage} className="text-xs font-bold text-blue-600 hover:underline">+ Add Page</button>
+                <div className="flex items-center gap-4 bg-black/20 px-4 py-1.5 rounded-full border border-white/10">
+                    <button onClick={() => changePage(-1)} disabled={currentPage === 0} className="p-1 hover:bg-white/10 rounded disabled:opacity-30 text-white"><ChevronLeft size={20} /></button>
+                    <span className="text-sm font-medium text-white">Page {currentPage + 1} / {pages.length}</span>
+                    <button onClick={() => changePage(1)} className="p-1 hover:bg-white/10 rounded text-white" disabled={currentPage >= pages.length - 1 && pages.length > 0 && false}><ChevronRight size={20} /></button>
+                    <div className="w-[1px] h-4 bg-white/20 mx-1"></div>
+                    <button onClick={addNewPage} className="text-xs font-bold text-blue-400 hover:text-blue-300 hover:underline">+ Add Page</button>
+                    <div className="w-[1px] h-4 bg-white/20 mx-1"></div>
+                    <span className="text-xs font-mono text-gray-400">{Math.round(zoom * 100)}%</span>
                 </div>
 
                 <div className="flex items-center gap-2">
-                    <button onClick={() => { }} className="p-2 hover:bg-zinc-100 rounded text-zinc-600" title="Zoom In"><ZoomIn size={20} /></button>
-                    <button onClick={downloadBook} className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-lg shadow-blue-500/20">
+                    <button onClick={() => setZoom(z => Math.max(z - 0.1, 0.1))} className="p-2 hover:bg-white/10 rounded text-gray-200" title="Zoom Out"><ZoomOut size={20} /></button>
+                    <button onClick={() => setZoom(z => Math.min(z + 0.1, 5))} className="p-2 hover:bg-white/10 rounded text-gray-200" title="Zoom In"><ZoomIn size={20} /></button>
+                    <button onClick={downloadBook} className="flex items-center gap-2 px-3 py-1.5 bg-white/10 text-white rounded-lg hover:bg-white/20 transition-colors text-xs font-bold border border-white/10">
                         <Download size={16} /> Download
                     </button>
                 </div>
@@ -537,7 +729,7 @@ function ToolButton({ icon, active, onClick, tooltip }: any) {
         <button
             onClick={onClick}
             title={tooltip}
-            className={`p-3 rounded-xl transition-all hover:scale-105 active:scale-95 ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-zinc-500 hover:bg-zinc-100 hover:text-zinc-800'}`}
+            className={`p-3 rounded-xl transition-all hover:scale-105 active:scale-95 ${active ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/30' : 'text-gray-400 hover:bg-white/10 hover:text-white'}`}
         >
             {icon}
         </button>
