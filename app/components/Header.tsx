@@ -92,7 +92,7 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                         </svg>
                     </div>
                     {!hideTitle && (
-                        <h1 className="text-xl font-bold text-gradient-animate">VISUAL MIND MAP</h1>
+                        <h1 className="text-xl font-bold text-white">VISUAL MIND MAP</h1>
                     )}
                 </Link>
             </div>
