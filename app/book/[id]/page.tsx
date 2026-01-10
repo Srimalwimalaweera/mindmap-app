@@ -12,6 +12,8 @@ import {
     Bold, Italic, Underline, AlignLeft, AlignCenter, AlignRight
 } from 'lucide-react';
 
+export const runtime = 'edge';
+
 export default function BookEditor() {
     const { id } = useParams();
     const { user, settings } = useAuth();
