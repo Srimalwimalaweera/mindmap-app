@@ -14,6 +14,7 @@ import {
   permanentDeleteMindMap,
   emptyTrash
 } from './services/mindmapService';
+import { createBook, getBooks, BookData } from './services/bookService';
 import Image from 'next/image';
 
 import LandingPage from './components/LandingPage';
@@ -25,7 +26,7 @@ import { useAuth } from '@/app/context/AuthProvider';
 
 export default function Dashboard() {
   const { user, userData, settings, loading: authLoading, logout } = useAuth(); // Use global auth
-  const [maps, setMaps] = useState<MindMapData[]>([]);
+  const [maps, setMaps] = useState<(MindMapData | BookData)[]>([]);
   // const [loading, setLoading] = useState(true); // Removed local loading
   const loading = authLoading; // Alias for compatibility with existing code if needed, or just use authLoading directly. 
   // Actually, let's keep a local loading for maps? 
@@ -39,6 +40,8 @@ export default function Dashboard() {
   const [isNameModalOpen, setIsNameModalOpen] = useState(false);
   const [selectedType, setSelectedType] = useState<'map' | 'book'>('map');
   const [newMapTitle, setNewMapTitle] = useState('');
+  const [bookOrientation, setBookOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const [bookSubject, setBookSubject] = useState('');
 
   // Trash State
   const [isTrashOpen, setIsTrashOpen] = useState(false);
@@ -70,15 +73,17 @@ export default function Dashboard() {
   const loadMaps = async (currentUser: User) => {
     try {
       const userMaps = await getUserMindMaps(currentUser.uid);
+      const userBooks = await getBooks(currentUser.uid);
+      const allProjects = [...userMaps, ...userBooks];
 
       // Client-side auto-delete check (older than 30 days)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const mapsKeep: MindMapData[] = [];
+      const mapsKeep: (MindMapData | BookData)[] = [];
       const mapsToDelete: string[] = [];
 
-      userMaps.forEach(map => {
+      allProjects.forEach(map => {
         if (map.isTrashed && map.trashedAt && new Date(map.trashedAt) < thirtyDaysAgo) {
           mapsToDelete.push(map.id);
         } else {
@@ -159,13 +164,24 @@ export default function Dashboard() {
       // User request: "digital book feature... I will tell later". So just save and show.
 
       if (selectedType === 'map') {
+        const newMapId = await createMindMap(user.uid, newMapTitle, 'map'); // Fix: Pass 3 args if needed or just 2. createMindMap(uid, title, type?)
+        // Wait, existing code uses createMindMap(uid, title, selectedType).
+        // I need to check createMindMap signature but I saw it takes (uid, title, type='map').
+        // Let me stick to what works for map.
+        // Actually, wait, I replaced the call. Let's fix.
+        // Previous call: const newMapId = await createMindMap(user.uid, newMapTitle, selectedType);
+        // But selectedType can be 'book' now. createMindMap returns ID.
         router.push(`/map/${newMapId}`);
       } else {
-        // Just refresh list for book
-        await loadMaps(user);
-        setIsNameModalOpen(false);
-        setNewMapTitle('');
+        const newBookId = await createBook(user.uid, newMapTitle, bookOrientation, bookSubject);
+        router.push(`/book/${newBookId}`);
       }
+
+      // await loadMaps(user); // No need to reload if redirecting
+      setIsNameModalOpen(false);
+      setNewMapTitle('');
+      setBookSubject('');
+      setBookOrientation('portrait');
     } catch (error) {
       console.error("Failed to create project", error);
       alert("Failed to create project.");
@@ -436,11 +452,12 @@ export default function Dashboard() {
             <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-4">
               {selectedType === 'map' ? 'New Mind Map' : 'New Digital Book'}
             </h3>
+
             <input
               autoFocus
               type="text"
-              placeholder="Project Name..."
-              className="w-full px-4 py-2 mb-6 border border-gray-300 dark:border-zinc-600 rounded-lg bg-gray-50 dark:bg-zinc-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+              placeholder={selectedType === 'book' ? "Book Name" : "Project Name"}
+              className="w-full px-4 py-2 mb-4 border border-gray-300 dark:border-zinc-600 rounded-lg bg-gray-50 dark:bg-zinc-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
               value={newMapTitle}
               onChange={(e) => setNewMapTitle(e.target.value)}
               onKeyDown={(e) => {
@@ -448,6 +465,42 @@ export default function Dashboard() {
                 if (e.key === 'Escape') setIsNameModalOpen(false);
               }}
             />
+
+            {selectedType === 'book' && (
+              <div className="mb-6 space-y-4 animate-in slide-in-from-top-2">
+                {/* Orientation */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-2">Page Orientation</label>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setBookOrientation('portrait')}
+                      className={`flex-1 py-2 rounded-lg border flex items-center justify-center gap-2 text-sm font-medium transition-colors ${bookOrientation === 'portrait' ? 'bg-blue-50 border-blue-500 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300' : 'border-gray-200 dark:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-800'}`}
+                    >
+                      <span className="w-3 h-4 border border-current rounded-sm"></span> Portrait
+                    </button>
+                    <button
+                      onClick={() => setBookOrientation('landscape')}
+                      className={`flex-1 py-2 rounded-lg border flex items-center justify-center gap-2 text-sm font-medium transition-colors ${bookOrientation === 'landscape' ? 'bg-blue-50 border-blue-500 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300' : 'border-gray-200 dark:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-800'}`}
+                    >
+                      <span className="w-4 h-3 border border-current rounded-sm"></span> Landscape
+                    </button>
+                  </div>
+                </div>
+
+                {/* Subject */}
+                <div>
+                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Subject / Description (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Science Notes"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-zinc-600 rounded-lg bg-gray-50 dark:bg-zinc-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
+                    value={bookSubject}
+                    onChange={e => setBookSubject(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setIsNameModalOpen(false)}
