@@ -1,5 +1,5 @@
 import { db } from "@/lib/firebase";
-import { collection, doc, getDoc, getDocs, query, where, addDoc, updateDoc, deleteDoc, writeBatch, increment } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where, addDoc, updateDoc, deleteDoc, writeBatch, increment, getCountFromServer } from "firebase/firestore";
 
 export interface MindMapData {
     id: string;
@@ -145,4 +145,38 @@ export async function emptyTrash(userId: string) {
     });
 
     await batch.commit();
+}
+
+export async function getUserRealtimeCounts(userId: string) {
+    if (!userId) return { maps: 0, books: 0 };
+
+    try {
+        const coll = collection(db, "markmaps");
+
+        // Count Maps
+        const qMaps = query(
+            coll,
+            where("userId", "==", userId),
+            where("type", "==", "map"),
+            where("isTrashed", "==", false)
+        );
+        const snapMaps = await getCountFromServer(qMaps);
+
+        // Count Books
+        const qBooks = query(
+            coll,
+            where("userId", "==", userId),
+            where("type", "==", "book"),
+            where("isTrashed", "==", false)
+        );
+        const snapBooks = await getCountFromServer(qBooks);
+
+        return {
+            maps: snapMaps.data().count,
+            books: snapBooks.data().count
+        };
+    } catch (e) {
+        console.error("Error fetching counts", e);
+        return { maps: 0, books: 0 };
+    }
 }

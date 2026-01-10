@@ -5,6 +5,7 @@ import { createPortal } from 'react-dom';
 import { useAuth, PlanType } from '../context/AuthProvider';
 import { updateProfile, sendPasswordResetEmail } from 'firebase/auth';
 import { auth, db } from '@/lib/firebase'; // Direct auth & db
+import { getUserRealtimeCounts } from '../services/mindmapService';
 import { doc, setDoc } from 'firebase/firestore';
 import Image from 'next/image';
 import { X, Check, Star, Settings, LogOut, User as UserIcon, Shield, Briefcase, Clock, Plus } from 'lucide-react';
@@ -44,11 +45,18 @@ function Modal({ title, isOpen, onClose, children }: { title: string, isOpen: bo
 }
 
 // 1. Profile Modal
-export function ProfileModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
+export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boolean, onClose: () => void, onSwitchModal?: (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => void }) {
     const { user, userData, refreshUserData } = useAuth();
     const [newName, setNewName] = useState(user?.displayName || '');
     const [loading, setLoading] = useState(false);
+    const [counts, setCounts] = useState({ maps: 0, books: 0 });
     const [msg, setMsg] = useState('');
+
+    useEffect(() => {
+        if (user && isOpen) {
+            getUserRealtimeCounts(user.uid).then(setCounts);
+        }
+    }, [user, isOpen]);
 
     const handleUpdateName = async () => {
         if (!user || !newName.trim()) return;
@@ -107,13 +115,57 @@ export function ProfileModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 my-4">
-                    <div className="p-3 bg-zinc-50 dark:bg-zinc-700/50 rounded-lg text-center">
-                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{userData.totalMaps}</div>
+                    <div className="p-3 bg-zinc-50 dark:bg-zinc-700/50 rounded-lg text-center border border-zinc-100 dark:border-zinc-600">
+                        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{counts.maps}</div>
                         <div className="text-xs text-zinc-500">Mind Maps</div>
                     </div>
-                    <div className="p-3 bg-zinc-50 dark:bg-zinc-700/50 rounded-lg text-center">
-                        <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{userData.totalBooks}</div>
+                    <div className="p-3 bg-zinc-50 dark:bg-zinc-700/50 rounded-lg text-center border border-zinc-100 dark:border-zinc-600">
+                        <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{counts.books}</div>
                         <div className="text-xs text-zinc-500">Digital Books</div>
+                    </div>
+                </div>
+
+                {/* Plan Info */}
+                <div className="flex items-center justify-between p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg border border-indigo-100 dark:border-indigo-800/30">
+                    <div>
+                        <div className="text-xs text-zinc-500 dark:text-zinc-400 uppercase font-bold">Current Plan</div>
+                        <div className="text-lg font-bold text-indigo-700 dark:text-indigo-300 capitalize">{userData.plan}</div>
+                    </div>
+                    {userData.plan !== 'ultra' && (
+                        <button
+                            onClick={() => onSwitchModal?.('upgrade')}
+                            className="bg-indigo-600 text-white px-3 py-1.5 rounded-full text-xs font-bold hover:bg-indigo-700 transition-colors"
+                        >
+                            Upgrade
+                        </button>
+                    )}
+                </div>
+
+                {/* Extra Resources */}
+                <div className="space-y-2">
+                    <div className="flex justify-between items-center p-2 rounded hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                        <div className="flex items-center gap-2">
+                            <Briefcase size={16} className="text-purple-500" />
+                            <span className="text-sm text-zinc-600 dark:text-zinc-300">Extra Projects</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="font-bold text-zinc-800 dark:text-white">{userData.extraSlots}</span>
+                            <button onClick={() => onSwitchModal?.('slots')} className="p-1 text-zinc-400 hover:text-green-600 hover:bg-green-50 rounded">
+                                <Plus size={14} />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex justify-between items-center p-2 rounded hover:bg-zinc-50 dark:hover:bg-zinc-800/50">
+                        <div className="flex items-center gap-2">
+                            <div className="rotate-45"><Shield size={16} className="text-pink-500" /></div>
+                            <span className="text-sm text-zinc-600 dark:text-zinc-300">Extra Pins</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <span className="font-bold text-zinc-800 dark:text-white">{userData.extraPins}</span>
+                            <button onClick={() => onSwitchModal?.('slots')} className="p-1 text-zinc-400 hover:text-green-600 hover:bg-green-50 rounded">
+                                <Plus size={14} />
+                            </button>
+                        </div>
                     </div>
                 </div>
 

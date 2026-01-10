@@ -1,6 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import { useAuth } from '../context/AuthProvider';
+import { Shield, Lock } from 'lucide-react';
 
 interface AutoSaveControlProps {
     onSave: () => void;
@@ -10,12 +12,12 @@ interface AutoSaveControlProps {
 }
 
 const INTERVALS = [
-    { label: '30 sec', value: 30 * 1000 },
-    { label: '1 min', value: 60 * 1000 },
-    { label: '3 min', value: 3 * 60 * 1000 },
-    { label: '5 min', value: 5 * 60 * 1000 },
-    { label: '10 min', value: 10 * 60 * 1000 },
-    { label: '30 min', value: 30 * 60 * 1000 },
+    { label: '30 sec', value: 30 * 1000, minPlan: 'ultra' },
+    { label: '1 min', value: 60 * 1000, minPlan: 'ultra' },
+    { label: '3 min', value: 3 * 60 * 1000, minPlan: 'ultra' },
+    { label: '5 min', value: 5 * 60 * 1000, minPlan: 'pro' },
+    { label: '10 min', value: 10 * 60 * 1000, minPlan: 'pro' },
+    { label: '30 min', value: 30 * 60 * 1000, minPlan: 'free' },
 ];
 
 export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, scheduledSaveTime }: AutoSaveControlProps) {
@@ -23,6 +25,14 @@ export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, sc
     const [selectedInterval, setSelectedInterval] = useState(INTERVALS[5]); // Default 30 min
     const dropdownRef = useRef<HTMLDivElement>(null);
     const [timeLeft, setTimeLeft] = useState<string | null>(null);
+    const { userData } = useAuth();
+
+    const isLocked = (minPlan: string) => {
+        if (!userData) return true;
+        if (userData.plan === 'ultra') return false;
+        if (userData.plan === 'pro') return minPlan === 'ultra';
+        return minPlan === 'pro' || minPlan === 'ultra';
+    };
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
@@ -102,20 +112,33 @@ export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, sc
                         <div className="px-4 py-2 text-xs font-semibold text-zinc-500 dark:text-zinc-400 border-b border-zinc-100 dark:border-zinc-700/50 select-none">
                             Auto-save Interval
                         </div>
-                        {INTERVALS.map((interval) => (
-                            <button
-                                key={interval.label}
-                                onClick={() => handleIntervalSelect(interval)}
-                                className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between hover:bg-zinc-50 dark:hover:bg-zinc-700/50 ${selectedInterval.label === interval.label ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/10' : 'text-zinc-700 dark:text-zinc-200'}`}
-                            >
-                                {interval.label}
-                                {selectedInterval.label === interval.label && (
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                        <polyline points="20 6 9 17 4 12" />
-                                    </svg>
-                                )}
-                            </button>
-                        ))}
+                        {INTERVALS.map((interval) => {
+                            const locked = isLocked(interval.minPlan);
+                            return (
+                                <button
+                                    key={interval.label}
+                                    onClick={() => !locked && handleIntervalSelect(interval)}
+                                    disabled={locked}
+                                    className={`w-full text-left px-4 py-2 text-sm flex items-center justify-between transition-colors
+                                        ${selectedInterval.label === interval.label ? 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/10' :
+                                            locked ? 'text-zinc-400 cursor-not-allowed bg-zinc-50 dark:bg-zinc-800/50' : 'text-zinc-700 dark:text-zinc-200 hover:bg-zinc-50 dark:hover:bg-zinc-700/50'}`}
+                                >
+                                    <span className="flex items-center gap-2">
+                                        {interval.label}
+                                        {locked && (
+                                            <span className="flex items-center gap-1 text-[10px] uppercase font-bold text-amber-500 bg-amber-100 dark:bg-amber-900/30 px-1.5 py-0.5 rounded">
+                                                <Shield size={10} /> {interval.minPlan}
+                                            </span>
+                                        )}
+                                    </span>
+                                    {selectedInterval.label === interval.label && (
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                            <polyline points="20 6 9 17 4 12" />
+                                        </svg>
+                                    )}
+                                </button>
+                            );
+                        })}
                     </div>
                 )}
             </div>

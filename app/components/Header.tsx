@@ -190,7 +190,7 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
             </div>
 
             {/* Modals managed by Header state - Rendered at root level for proper z-indexing */}
-            {activeModal === 'profile' && <ProfileModal isOpen={true} onClose={() => setActiveModal(null)} />}
+            {activeModal === 'profile' && <ProfileModal isOpen={true} onClose={() => setActiveModal(null)} onSwitchModal={handleAction} />}
             {activeModal === 'upgrade' && <UpgradeModal isOpen={true} onClose={() => setActiveModal(null)} />}
             {activeModal === 'slots' && <BuySlotsModal isOpen={true} onClose={() => setActiveModal(null)} />}
             {activeModal === 'settings' && <SettingsModal isOpen={true} onClose={() => setActiveModal(null)} />}
