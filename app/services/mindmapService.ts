@@ -17,8 +17,8 @@ export interface MindMapData {
 export async function createMindMap(userId: string, title: string, type: 'map' | 'book' = 'map') {
     if (!userId) throw new Error("User ID is required");
 
-    // Initial content with the title as the root node and a ghost node
-    const content = `# ${title}\n## @[[ADD_NEW]]`;
+    // Initial content with the title as the root node
+    const content = `# ${title}`;
 
     const docData = {
         userId,

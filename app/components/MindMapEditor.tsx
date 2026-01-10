@@ -55,8 +55,29 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     const [viewMode, setViewMode] = useState<ViewMode>('visual');
     const [isFullscreen, setIsFullscreen] = useState(false);
 
+    // Onboarding State
+    const [showOnboarding, setShowOnboarding] = useState(false);
+
+    useEffect(() => {
+        // Show onboarding only if map is basically empty (just title)
+        const lines = markdown.split('\n').filter(l => l.trim().length > 0);
+        if (lines.length <= 1) {
+            setShowOnboarding(true);
+        }
+    }, [markdown]); // Updated to depend on markdown to detect new load
+
+    // Use ref to access state inside event listener without re-binding
+    const showOnboardingRef = useRef(false);
+    useEffect(() => { showOnboardingRef.current = showOnboarding; }, [showOnboarding]);
+
+    const dismissOnboarding = () => {
+        if (showOnboardingRef.current) setShowOnboarding(false);
+    };
+
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
+            if (showOnboardingRef.current) dismissOnboarding();
+
             // Check for Ctrl+Z / Cmd+Z
             if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
                 if (e.shiftKey) {
@@ -220,6 +241,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     svg.on('contextmenu', null);
 
                     svg.on('click', function (event) {
+                        dismissOnboarding(); // Dismiss on any click
                         const target = event.target as Element;
 
                         // MEDIA LOAD BUTTON CLICK
@@ -1273,7 +1295,22 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         Note
                     </button>
                 </div>
-            </div >
+            </div>
+
+            {/* Onboarding Tooltip */}
+            {showOnboarding && viewMode === 'visual' && (
+                <div className="absolute top-[55%] left-1/2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-50">
+                    <div className="animate-bounce">
+                        <div className="relative bg-blue-600/90 text-white px-4 py-3 rounded-xl shadow-2xl border border-blue-400/30 backdrop-blur-md">
+                            <div className="absolute -top-2 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-8 border-l-transparent border-r-8 border-r-transparent border-b-8 border-b-blue-600/90"></div>
+                            <div className="flex flex-col items-center gap-1 text-center">
+                                <span className="font-bold text-sm">Right-click center node</span>
+                                <span className="text-[10px] opacity-80">to start creating your map!</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div >
     );
 }
