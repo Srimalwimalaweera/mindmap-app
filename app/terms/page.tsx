@@ -45,7 +45,7 @@ export default function TermsPage() {
 
                     <section>
                         <h2 className="text-xl font-semibold text-white mb-2">7. Contact Us</h2>
-                        <p>If you have any questions about these Terms, please contact us at support@dilucreation.com.</p>
+                        <p>If you have any questions about these Terms, please contact us at srimalwimalaweera@gmail.com.</p>
                     </section>
 
                     <div className="mt-8 pt-6 border-t border-white/10 text-sm text-gray-500">

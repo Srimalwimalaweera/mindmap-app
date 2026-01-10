@@ -81,7 +81,7 @@ export default function AutoSaveControl({ onSave, isSaving, onIntervalChange, sc
         return () => clearInterval(intervalId);
     }, [scheduledSaveTime]);
 
-    const handleIntervalSelect = (interval: typeof INTERVALS[0]) => {
+    const handleIntervalSelect = (interval: { label: string; value: number; minPlan: string }) => {
         setSelectedInterval(interval);
         onIntervalChange(interval.value);
         setIsOpen(false);
