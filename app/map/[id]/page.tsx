@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import { auth } from '@/lib/firebase';
 import { User } from 'firebase/auth';
-import { saveMindMap } from '@/app/services/mindmapService';
+import { saveMindMap, getMindMap } from '@/app/services/mindmapService';
 import Image from 'next/image';
 
 import { useUndoRedo } from '@/app/hooks/useUndoRedo';
@@ -38,11 +38,25 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
 
     // Initial Load
     useEffect(() => {
-        // Load initial data (mock for now, or fetch from DB if implemented)
-        // For this task, we assume new map or empty
-        const initialContent = '# Root Node\n## Child 1\n## Child 2';
-        resetMarkdown(initialContent);
-        setLastSavedMarkdown(initialContent);
+        let isMounted = true;
+        const loadMap = async () => {
+            try {
+                const content = await getMindMap(id);
+                if (isMounted && content) {
+                    resetMarkdown(content);
+                    setLastSavedMarkdown(content);
+                } else if (isMounted) {
+                    // Fallback for new empty map or error
+                    const initialContent = '# Root Node\n## Child 1\n## Child 2';
+                    resetMarkdown(initialContent);
+                    setLastSavedMarkdown(initialContent);
+                }
+            } catch (err) {
+                console.error("Failed to load map", err);
+            }
+        };
+        loadMap();
+        return () => { isMounted = false; };
     }, [id, resetMarkdown]);
 
     const handleSave = async () => {
