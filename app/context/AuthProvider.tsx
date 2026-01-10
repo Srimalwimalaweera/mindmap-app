@@ -46,6 +46,7 @@ export interface AppSettings {
         ultra: number;
     };
     autoSaveOptions: { label: string; value: number; minPlan: 'free' | 'pro' | 'ultra' }[];
+    bookAutoSaveOptions: { label: string; value: number; minPlan: 'free' | 'pro' | 'ultra' }[];
     additionalProjectSlots: { label: string; price: number; slots: number }[];
     additionalPinSlots: { label: string; price: number; slots: number }[];
     bankDetails: {
@@ -106,8 +107,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const plansDoc = await getDoc(doc(db, 'settings', 'plans'));
             const pinsDoc = await getDoc(doc(db, 'settings', 'pin_settings'));
             const limitsDoc = await getDoc(doc(db, 'settings', 'default_project_limit'));
-            // Fetch book_autosave_times instead of old auto_saving_times
-            const autoSaveDoc = await getDoc(doc(db, 'settings', 'book_autosave_times'));
+            // Fetch auto_saving_times for Mind Maps (Restoring logic)
+            const autoSaveDoc = await getDoc(doc(db, 'settings', 'auto_saving_times'));
+            // Fetch book_autosave_times for Books (New logic)
+            const bookAutoSaveDoc = await getDoc(doc(db, 'settings', 'book_autosave_times'));
 
             const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
             const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins'));
@@ -147,6 +150,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     ultra: limitsDoc.data()?.ultra ?? 50,
                 },
                 autoSaveOptions: [],
+                bookAutoSaveOptions: [],
                 additionalProjectSlots: [],
                 additionalPinSlots: [],
                 bankDetails: {
@@ -158,26 +162,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 maintenanceMode: systemDoc.exists() ? systemDoc.data()?.maintenanceMode || false : false
             };
 
-            // Parse Auto/Save Times from book_autosave_times
+            // Parse Auto/Save Times for Mind Maps (auto_saving_times)
             if (autoSaveDoc.exists()) {
                 const data = autoSaveDoc.data();
                 const options: any[] = [];
-
-                // The screenshot shows keys 1, 2, 3... and values "desable", 10, 15...
                 Object.values(data).forEach((val: any) => {
                     const isDisable = val === 'desable';
                     const minutes = isDisable ? 0 : Number(val);
-
                     options.push({
                         label: isDisable ? 'Disable Auto-save' : `${minutes} min`,
-                        value: isDisable ? 0 : minutes * 60 * 1000, // Convert min to ms
+                        value: isDisable ? 0 : minutes * 60 * 1000,
                         minPlan: getMinPlan(isDisable ? 'desable' : minutes)
                     });
                 });
-
-                // Sort: Disable (0) first, then by time ascending (or descending? Request said dropdown options order... doesn't specify sort. Usually Disable first, then fastest to slowest or vice versa.)
-                // Let's sort by value ascending (0, 10, 15, 20, 30).
                 parsedSettings.autoSaveOptions = options.sort((a, b) => a.value - b.value);
+            }
+
+            // Parse Auto/Save Times for Books (book_autosave_times)
+            if (bookAutoSaveDoc.exists()) {
+                const data = bookAutoSaveDoc.data();
+                const options: any[] = [];
+                Object.values(data).forEach((val: any) => {
+                    const isDisable = val === 'desable';
+                    const minutes = isDisable ? 0 : Number(val);
+                    options.push({
+                        label: isDisable ? 'Disable Auto-save' : `${minutes} min`,
+                        value: isDisable ? 0 : minutes * 60 * 1000,
+                        minPlan: getMinPlan(isDisable ? 'desable' : minutes)
+                    });
+                });
+                parsedSettings.bookAutoSaveOptions = options.sort((a, b) => a.value - b.value);
             }
 
             // Parse Add Project Slots
@@ -273,7 +287,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     extraPins: data.extraPins || 0,
                     totalMaps: data.totalMaps || 0,
                     totalBooks: data.totalBooks || 0,
-                    autoSaveInterval: data.autoSaveInterval || 1800000, // Default 30 min
+                    autoSaveInterval: data.autoSaveInterval ?? 1800000, // Default 30 min if undefined
                     role: data.role || 'member',
                     banUntil: data.banUntil,
                     isPermabanned: data.isPermabanned,

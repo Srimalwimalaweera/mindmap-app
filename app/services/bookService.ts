@@ -51,7 +51,8 @@ export const getBook = async (bookId: string): Promise<BookData | null> => {
 
 export const updateBook = async (bookId: string, data: Partial<BookData>) => {
     const docRef = doc(db, COLLECTION_NAME, bookId);
-    await updateDoc(docRef, { ...data, updatedAt: serverTimestamp() });
+    // Removed `updatedAt: serverTimestamp()` as per user request to stop persistent updates
+    await updateDoc(docRef, { ...data });
 };
 
 export const saveBookPages = async (uid: string, bookId: string, pages: any[]) => {
@@ -64,7 +65,9 @@ export const loadBookPages = async (uid: string, bookId: string): Promise<any[]>
     try {
         const storageRef = ref(storage, `books/${uid}/${bookId}.json`);
         const url = await getDownloadURL(storageRef);
-        const res = await fetch(url);
+        // Use Proxy to bypass CORS
+        const res = await fetch(`/api/proxy/storage?url=${encodeURIComponent(url)}`);
+        if (!res.ok) throw new Error(`Proxy error: ${res.statusText}`);
         const data = await res.json();
         return Array.isArray(data) ? data : [];
     } catch (e) {

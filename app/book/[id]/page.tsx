@@ -44,87 +44,89 @@ export default function BookEditor() {
 
 
     // Auto-Save State
-    const [autoSaveMs, setAutoSaveMs] = useState(0);
-    const [showSaveMenu, setShowSaveMenu] = useState(false);
+    // Local Cache Key
+    const LOCAL_CACHE_KEY = `book_cache_${id}`;
+
     const pagesRef = useRef(pages); // Ref to hold latest pages for interval
     const canvasRef = useRef(canvas); // Ref to hold latest canvas
     const currentPageRef = useRef(currentPage);
+
+    // Save to Local Cache
+    useEffect(() => {
+        if (!canvas || !id) return;
+
+        const handleModification = () => {
+            const activeCanvas = canvas;
+            if (activeCanvas) {
+                const json = activeCanvas.toJSON();
+                // We need to update the pagesRef or current pages to reflect this change
+                // But `pages` state update triggers re-render.
+                // We can construct the cache object directly.
+                const currentPages = [...pagesRef.current];
+                currentPages[currentPageRef.current] = json;
+
+                localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify({
+                    updatedAt: Date.now(),
+                    pages: currentPages
+                }));
+            }
+        };
+
+        canvas.on('object:modified', handleModification);
+        canvas.on('object:added', handleModification);
+        canvas.on('object:removed', handleModification);
+        canvas.on('text:changed', handleModification);
+        canvas.on('path:created', handleModification);
+
+        return () => {
+            canvas.off('object:modified', handleModification);
+            canvas.off('object:added', handleModification);
+            canvas.off('object:removed', handleModification);
+            canvas.off('text:changed', handleModification);
+            canvas.off('path:created', handleModification);
+        };
+    }, [canvas, id]);
+
+    // Cleanup Cache on Unmount (Optional? No, "Realtime" means it stays)
+    // Cleanup Cache on Manual Save? Yes.
 
     // Sync Refs
     useEffect(() => { pagesRef.current = pages; }, [pages]);
     useEffect(() => { canvasRef.current = canvas; }, [canvas]);
     useEffect(() => { currentPageRef.current = currentPage; }, [currentPage]);
 
-    // Initialize Auto-Save from User Data
-    useEffect(() => {
-        if (userData?.autoSaveInterval !== undefined) {
-            setAutoSaveMs(userData.autoSaveInterval);
-        }
-    }, [userData?.autoSaveInterval]);
 
-    const handleSave = useCallback(async (isAuto = false) => {
+
+    const handleSave = useCallback(async () => {
         if (!user || typeof id !== 'string') return;
         setSaving(true);
         try {
             let pgs = [...pagesRef.current];
             const activeCanvas = canvasRef.current;
             if (activeCanvas) {
-                // If we are auto-saving, we might be on a different page than the ref if fast switching?
-                // But `canvasRef` should match `currentPageRef`.
                 pgs[currentPageRef.current] = activeCanvas.toJSON();
-                // We update state quietly to keep in sync without re-rendering everything if possible
-                // But React state needs to be updated.
-                // If manual save, we definitely update state.
             }
-            // Update pages state (optional but good for consistency)
-            // setPages(pgs); // Causes re-render. Maybe skip if auto-save?
 
             await saveBookPages(user.uid, id, pgs);
             const now = new Date();
-            await updateBook(id, { updatedAt: now });
-            setBook(prev => prev ? { ...prev, updatedAt: now } : null);
-            if (!isAuto) {
-                // alert("Saved!"); // Optional feedback
-            }
+            // Removed explicit updatedAt push
+            // await updateBook(id, { updatedAt: now });
+            setBook(prev => prev ? { ...prev, updatedAt: now } : null); // Update local state only
+
+            // Clear Cache after successful DB Save
+            localStorage.removeItem(LOCAL_CACHE_KEY);
+            alert("Saved to Database!");
         } catch (e) {
             console.error("Save failed", e);
-            if (!isAuto) alert("Save failed");
+            alert("Save failed");
         } finally {
             setSaving(false);
         }
     }, [user, id]);
 
-    // Auto-Save Interval
-    useEffect(() => {
-        if (autoSaveMs <= 0) return;
-        const interval = setInterval(() => {
-            handleSave(true);
-        }, autoSaveMs);
-        return () => clearInterval(interval);
-    }, [autoSaveMs, handleSave]);
 
-    const handleSetAutoSave = async (option: any) => {
-        const { minPlan, value } = option;
-        const currentPlan = userData?.plan || 'free';
 
-        // Check Logic
-        // Hierarchy: free < pro < ultra
-        const levels = { 'free': 0, 'pro': 1, 'ultra': 2 };
 
-        if (levels[currentPlan as keyof typeof levels] < levels[minPlan as keyof typeof levels]) {
-            alert(`Feature limited to ${minPlan.toUpperCase()} users. Please upgrade.`);
-            // Custom modal logic can replace this alert
-            return;
-        }
-
-        try {
-            setAutoSaveMs(value);
-            await updateAutoSaveInterval(value);
-            setShowSaveMenu(false);
-        } catch (e) {
-            console.error(e);
-        }
-    };
     useEffect(() => {
         if (!user || typeof id !== 'string') return;
 
@@ -138,12 +140,31 @@ export default function BookEditor() {
                 }
                 setBook(bookData);
 
-                const savedPages = await loadBookPages(user.uid, id);
-                if (savedPages && savedPages.length > 0) {
-                    setPages(savedPages);
-                } else {
-                    setPages([null]); // Start with 1 page
+                // Load Pages
+                let initialPages = [null];
+
+                // 1. Try DB
+                const dbPages = await loadBookPages(user.uid, id);
+                if (dbPages && dbPages.length > 0) {
+                    initialPages = dbPages;
                 }
+
+                // 2. Check Local Cache (Realtime Work)
+                const cachedParams = localStorage.getItem(LOCAL_CACHE_KEY);
+                if (cachedParams) {
+                    try {
+                        const parsed = JSON.parse(cachedParams);
+                        if (parsed.pages && Array.isArray(parsed.pages)) {
+                            console.log("Loading from Local Cache (Unsaved Work)");
+                            initialPages = parsed.pages;
+                            // Optional: Notification that we loaded unsaved work?
+                        }
+                    } catch (e) {
+                        console.error("Cache load failed", e);
+                    }
+                }
+
+                setPages(initialPages);
                 setLoading(false);
             } catch (e) {
                 console.error(e);
@@ -270,40 +291,8 @@ export default function BookEditor() {
         return json;
     }, [canvas, currentPage]);
 
-    // Auto-Save
-    useEffect(() => {
-        if (!user || typeof id !== 'string' || pages.length === 0) return;
+    // Auto-Save block removed individually to ensure no ghost saves.
 
-        const saveToCloud = async () => {
-            setSaving(true);
-            try {
-                // Ensure current page is up to date in 'pages' array
-                let currentPages = pages;
-                if (canvas) {
-                    const json = canvas.toJSON();
-                    setPages(prev => {
-                        const newPages = [...prev];
-                        newPages[currentPage] = json;
-                        currentPages = newPages;
-                        return newPages;
-                    });
-                }
-
-                await saveBookPages(user.uid, id, currentPages);
-                await updateBook(id, { updatedAt: new Date() });
-            } catch (e) {
-                console.error("Auto-save failed", e);
-            } finally {
-                setSaving(false);
-            }
-        };
-
-        const interval = setInterval(saveToCloud, 60000); // 1 min auto-save locally/cloud? User said 5 min.
-        // Let's use 5 min as base, or settings. 
-        // Just keeping 60s for now for safety.
-
-        return () => clearInterval(interval);
-    }, [user, id, pages, settings]);
 
     // Actions
     const handleAddText = () => {
@@ -594,53 +583,14 @@ export default function BookEditor() {
 
                 <div className="flex items-center gap-2">
                     <div className="relative">
-                        <div className="flex items-center bg-blue-600 rounded-lg shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-colors">
-                            <button
-                                onClick={() => handleSave(false)}
-                                className="flex items-center gap-2 px-3 py-1.5 text-white text-xs font-bold border-r border-blue-500 hover:bg-blue-800/20 rounded-l-lg"
-                            >
-                                {saving ? <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" /> : <Save size={14} />}
-                                {saving ? 'Saving' : 'Save'}
-                            </button>
-                            <button
-                                onClick={() => setShowSaveMenu(!showSaveMenu)}
-                                className="px-1.5 py-1.5 text-white hover:bg-blue-800/20 rounded-r-lg"
-                            >
-                                {autoSaveMs > 0 ? <Clock size={14} className="animate-pulse" /> : <ChevronDown size={14} />}
-                            </button>
-                        </div>
-
-                        {/* Dropdown Menu */}
-                        {showSaveMenu && (
-                            <div className="absolute top-full right-0 mt-2 w-48 bg-[#1e1e2e] border border-white/10 rounded-xl shadow-xl overflow-hidden z-50 backdrop-blur-xl">
-                                <div className="px-3 py-2 text-xs font-bold text-gray-400 border-b border-white/10">
-                                    Auto-Save Settings
-                                </div>
-                                <div className="py-1">
-                                    {(settings?.autoSaveOptions || [
-                                        { label: 'Disable Auto-save', value: 0, minPlan: 'free' },
-                                        { label: '30 min', value: 1800000, minPlan: 'pro' },
-                                        { label: '20 min', value: 1200000, minPlan: 'pro' },
-                                        { label: '15 min', value: 900000, minPlan: 'ultra' },
-                                        { label: '10 min', value: 600000, minPlan: 'ultra' },
-                                    ]).map((opt: any, i) => (
-                                        <button
-                                            key={i}
-                                            onClick={() => handleSetAutoSave(opt)}
-                                            className={`w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-white/10 transition-colors ${autoSaveMs === opt.value ? 'bg-blue-500/20 text-blue-400' : 'text-gray-200'}`}
-                                        >
-                                            <span className="flex items-center gap-2">
-                                                {autoSaveMs === opt.value && <Check size={12} />}
-                                                {opt.label}
-                                            </span>
-                                            {/* Lock Icon for permissions */}
-                                            {userData?.plan === 'free' && opt.minPlan !== 'free' && <Lock size={10} className="text-gray-500" />}
-                                            {userData?.plan === 'pro' && opt.minPlan === 'ultra' && <Lock size={10} className="text-gray-500" />}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                        <button
+                            onClick={handleSave}
+                            disabled={saving}
+                            className="flex items-center gap-2 px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-xs font-bold shadow-lg shadow-blue-500/20 disabled:opacity-50"
+                        >
+                            {saving ? <div className="animate-spin w-3 h-3 border-2 border-current border-t-transparent rounded-full" /> : <Save size={16} />}
+                            {saving ? 'Saving...' : 'Save'}
+                        </button>
                     </div>
 
                     <button onClick={() => setShowLeftBar(!showLeftBar)} className="md:hidden p-2 hover:bg-white/10 rounded text-white">
@@ -686,9 +636,7 @@ export default function BookEditor() {
                         <canvas ref={canvasEl} className="bg-white" />
 
                         {/* Metadata Overlays */}
-                        <div className="absolute bottom-3 left-4 text-[10px] text-gray-400 font-mono pointer-events-none select-none z-10">
-                            Last updated: {book?.updatedAt ? new Date(book.updatedAt).toLocaleDateString() + ' ' + new Date(book.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never'}
-                        </div>
+
                         <div className="absolute bottom-3 right-4 text-[10px] text-gray-400 font-mono pointer-events-none select-none z-10">
                             Page {currentPage + 1}
                         </div>
