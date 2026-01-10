@@ -1,5 +1,5 @@
 import { db } from "@/lib/firebase";
-import { collection, doc, getDoc, addDoc, updateDoc, serverTimestamp, query, where, getDocs, increment } from "firebase/firestore";
+import { collection, doc, getDoc, addDoc, updateDoc, serverTimestamp, query, where, getDocs, increment, runTransaction } from "firebase/firestore";
 
 export async function createPaymentRequest(userId: string, data: { type: string, itemId: string, amount: number, details: string }) {
     const userRef = doc(db, "users", userId);
@@ -100,30 +100,39 @@ export async function approvePayment(reqId: string, userId: string, type: string
     const reqRef = doc(db, "payment_requests", reqId);
     const userRef = doc(db, "users", userId);
 
-    await updateDoc(reqRef, { status: 'approved', approvedAt: serverTimestamp() });
+    try {
+        await runTransaction(db, async (transaction) => {
+            // Check request
+            const reqDoc = await transaction.get(reqRef);
+            if (!reqDoc.exists()) throw new Error("Request does not exist");
+            if (reqDoc.data().status !== 'pending') throw new Error("Request already processed");
 
-    // Grant Items
-    if (type === 'upgrade') {
-        await updateDoc(userRef, {
-            plan: itemId,
-            // Reset limits to defaults of that plan? Or dynamic calc handles it.
-            // But we should update limits if hardcoded in user doc.
-            // Actually AuthProvider logic uses plan to determine limits mostly, but we store projectLimit?
-            // Let's just update the plan. AuthProvider logic should handle derived limits or we update them here if we want to be safe.
+            const updatePayload: any = {};
+            const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+
+            if (type === 'upgrade') {
+                // itemId expected to be 'pro' or 'ultra'
+                updatePayload.plan = itemId;
+                updatePayload.planExpiresAt = Date.now() + THIRTY_DAYS_MS;
+            } else if (type === 'slots') {
+                const match = itemId.match(/(\d+)/);
+                const count = match ? parseInt(match[1]) : 0;
+                updatePayload.extraSlots = increment(count);
+            } else if (type === 'pins') {
+                const match = itemId.match(/(\d+)/);
+                const count = match ? parseInt(match[1]) : 0;
+                updatePayload.extraPins = increment(count);
+            }
+
+            // Update Request
+            transaction.update(reqRef, { status: 'approved', approvedAt: serverTimestamp() });
+
+            // Update User
+            transaction.update(userRef, updatePayload);
         });
-    } else if (type === 'slots') {
-        // itemId is like "5 Slots"
-        const match = itemId.match(/(\d+)/);
-        const count = match ? parseInt(match[1]) : 0;
-        await updateDoc(userRef, {
-            extraSlots: increment(count)
-        });
-    } else if (type === 'pins') {
-        const match = itemId.match(/(\d+)/);
-        const count = match ? parseInt(match[1]) : 0;
-        await updateDoc(userRef, {
-            extraPins: increment(count)
-        });
+    } catch (e) {
+        console.error("Approve Payment Error", e);
+        throw e;
     }
 }
 

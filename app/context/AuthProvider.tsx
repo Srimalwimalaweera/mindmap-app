@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { auth, db, googleProvider } from '@/lib/firebase';
 import { onAuthStateChanged, User, signOut as firebaseSignOut } from 'firebase/auth';
-import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, getDocs } from 'firebase/firestore';
 
 // --- Types ---
 
@@ -26,6 +26,7 @@ export interface UserData {
     role: 'member' | 'admin';
     banUntil?: number;
     isPermabanned?: boolean;
+    planExpiresAt?: number;
 }
 
 export interface AppSettings {
@@ -223,6 +224,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
             if (userSnap.exists()) {
                 const data = userSnap.data();
+
+                // Check Plan Expiration
+                if (data.planExpiresAt && Date.now() > data.planExpiresAt && data.plan !== 'free') {
+                    // Expired - Downgrade in DB
+                    try {
+                        await updateDoc(userRef, {
+                            plan: 'free',
+                            planExpiresAt: null
+                        });
+                        console.log("Plan expired. Auto-downgraded to free.");
+                        data.plan = 'free'; // Update local
+                        data.planExpiresAt = null;
+                    } catch (e) {
+                        console.error("Error auto-downgrading", e);
+                    }
+                }
+
                 setUserData({
                     uid,
                     email: data.email,
@@ -239,7 +257,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     autoSaveInterval: data.autoSaveInterval || 1800000, // Default 30 min
                     role: data.role || 'member',
                     banUntil: data.banUntil,
-                    isPermabanned: data.isPermabanned
+                    isPermabanned: data.isPermabanned,
+                    planExpiresAt: data.planExpiresAt
                 });
             } else {
                 // Initialize New User

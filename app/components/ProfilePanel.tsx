@@ -184,7 +184,8 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
 // 2. Upgrade Modal
 // 2. Upgrade Modal
 export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-    const { settings, userData, refreshSettings } = useAuth();
+    const { settings, userData, refreshSettings, user } = useAuth();
+    const router = useRouter();
 
     useEffect(() => {
         if (isOpen) {
@@ -192,8 +193,9 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
         }
     }, [isOpen, refreshSettings]);
 
-    if (!settings || !userData) return null;
+    if (!settings) return null;
 
+    const currentPlan = userData?.plan || 'free';
     const plans: PlanType[] = ['pro', 'ultra'];
     const [selectedPlan, setSelectedPlan] = useState<PlanType | null>(null);
 
@@ -202,12 +204,12 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
     const [timeLeft, setTimeLeft] = useState(0);
 
     const handlePayment = async () => {
-        if (!selectedPlan || !userData) return;
+        if (!selectedPlan || !userData || !user) return;
         setProcessing(true);
         setStatusMsg('Creating request...');
 
         try {
-            await createPaymentRequest(userData.uid, {
+            await createPaymentRequest(user.uid, {
                 type: 'upgrade',
                 itemId: selectedPlan,
                 amount: settings.plans[selectedPlan],
@@ -224,7 +226,7 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                 setTimeLeft(count);
                 if (count <= 0) {
                     clearInterval(timer);
-                    const msg = `Hi, I want to upgrade to ${selectedPlan} plan (User ID: ${userData.uid}). Here is my payment slip.`;
+                    const msg = `Hi, I want to upgrade to ${selectedPlan} plan (User ID: ${user.uid}). Here is my payment slip.`;
                     window.open(`https://wa.me/94761779019?text=${encodeURIComponent(msg)}`, '_blank');
                     onClose();
                 }
@@ -247,18 +249,18 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                     <div className="mb-4 text-center">
                         <p className="text-sm text-zinc-500">Current Plan</p>
                         <div className="inline-block px-3 py-1 mt-1 font-bold text-white bg-zinc-500 rounded-full capitalize text-sm">
-                            {userData.plan}
+                            {currentPlan}
                         </div>
                     </div>
 
                     <div className="space-y-3">
                         {plans.map(plan => (
-                            <div key={plan} className={`p-4 rounded-xl border-2 flex justify-between items-center cursor-pointer transition-all ${userData.plan === plan ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-zinc-200 dark:border-zinc-600 hover:border-blue-400'
+                            <div key={plan} className={`p-4 rounded-xl border-2 flex justify-between items-center cursor-pointer transition-all ${currentPlan === plan ? 'border-green-500 bg-green-50 dark:bg-green-900/20' : 'border-zinc-200 dark:border-zinc-600 hover:border-blue-400'
                                 }`}>
                                 <div>
                                     <h4 className="font-bold text-lg capitalize flex items-center gap-2 dark:text-white">
                                         {plan}
-                                        {userData.plan === plan && <Check size={16} className="text-green-500" />}
+                                        {currentPlan === plan && <Check size={16} className="text-green-500" />}
                                     </h4>
                                     <div className="text-xs text-zinc-500 mt-1">
                                         {plan === 'pro' && 'More limits, more pins.'}
@@ -267,12 +269,22 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
                                 </div>
                                 <div className="text-right">
                                     <div className="text-xl font-bold text-blue-600 dark:text-blue-400">LKR {settings.plans[plan]}</div>
-                                    {userData.plan !== plan && (
+                                    {currentPlan !== plan && (
                                         <button
-                                            onClick={() => setSelectedPlan(plan)}
-                                            className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full mt-1 hover:bg-blue-700"
+                                            onClick={() => {
+                                                if (userData) {
+                                                    setSelectedPlan(plan);
+                                                } else {
+                                                    // Redirect to login or show msg
+                                                    // For now, let's close and maybe redirect? 
+                                                    // Or just show button as "Login"
+                                                    router.push('/login');
+                                                    onClose();
+                                                }
+                                            }}
+                                            className={`text-xs px-3 py-1.5 rounded-full mt-1 ${userData ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-zinc-800 text-white hover:bg-zinc-900'} `}
                                         >
-                                            Upgrade
+                                            {userData ? 'Upgrade' : 'Login to Upgrade'}
                                         </button>
                                     )}
                                 </div>
@@ -337,7 +349,8 @@ export function UpgradeModal({ isOpen, onClose }: { isOpen: boolean, onClose: ()
 
 // 3. Buy Slots Modal
 export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: () => void }) {
-    const { settings, userData, refreshSettings } = useAuth();
+    const { settings, userData, refreshSettings, user } = useAuth();
+    const router = useRouter();
     const [selectedItem, setSelectedItem] = useState<{ label: string, price: number, type: 'slots' | 'pins' } | null>(null);
 
     useEffect(() => {
@@ -346,21 +359,21 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
         }
     }, [isOpen, refreshSettings]);
 
-    if (!settings || !userData) return null;
+    if (!settings) return null;
 
     const [processing, setProcessing] = useState(false);
     const [statusMsg, setStatusMsg] = useState('');
     const [timeLeft, setTimeLeft] = useState(0);
 
     const handlePayment = async () => {
-        if (!selectedItem || !userData) return;
+        if (!selectedItem || !userData || !user) return;
         setProcessing(true);
         setStatusMsg('Creating request...');
 
         try {
-            await createPaymentRequest(userData.uid, {
+            await createPaymentRequest(user.uid, {
                 type: selectedItem.type,
-                itemId: selectedItem.label, // Or key if available, but label is unique-ish
+                itemId: selectedItem.label,
                 amount: selectedItem.price,
                 details: `Buy ${selectedItem.label} (${selectedItem.type})`
             });
@@ -375,7 +388,7 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                 setTimeLeft(count);
                 if (count <= 0) {
                     clearInterval(timer);
-                    const msg = `Hi, I want to buy ${selectedItem.label} (${selectedItem.type}) (User ID: ${userData.uid}). Here is my payment slip.`;
+                    const msg = `Hi, I want to buy ${selectedItem.label} (${selectedItem.type}) (User ID: ${user.uid}). Here is my payment slip.`;
                     window.open(`https://wa.me/94761779019?text=${encodeURIComponent(msg)}`, '_blank');
                     onClose();
                 }
@@ -388,6 +401,15 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                 setProcessing(false);
                 setStatusMsg('');
             }, 3000);
+        }
+    };
+
+    const handleItemClick = (item: any, type: 'slots' | 'pins') => {
+        if (userData) {
+            setSelectedItem({ ...item, type });
+        } else {
+            router.push('/login');
+            onClose();
         }
     };
 
@@ -410,10 +432,10 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                                 </div>
                             </div>
                             <button
-                                onClick={() => setSelectedItem({ ...item, type: 'slots' })}
-                                className="px-4 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-black text-xs font-bold rounded-full hover:opacity-90"
+                                onClick={() => handleItemClick(item, 'slots')}
+                                className={`px-4 py-1.5 text-xs font-bold rounded-full hover:opacity-90 ${userData ? 'bg-zinc-900 dark:bg-white text-white dark:text-black' : 'bg-zinc-200 text-zinc-500'}`}
                             >
-                                LKR {item.price}
+                                {userData ? `LKR ${item.price}` : 'Login'}
                             </button>
                         </div>
                     ))}
@@ -431,10 +453,10 @@ export function BuySlotsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
                                 </div>
                             </div>
                             <button
-                                onClick={() => setSelectedItem({ ...item, type: 'pins' })}
-                                className="px-4 py-1.5 bg-zinc-900 dark:bg-white text-white dark:text-black text-xs font-bold rounded-full hover:opacity-90"
+                                onClick={() => handleItemClick(item, 'pins')}
+                                className={`px-4 py-1.5 text-xs font-bold rounded-full hover:opacity-90 ${userData ? 'bg-zinc-900 dark:bg-white text-white dark:text-black' : 'bg-zinc-200 text-zinc-500'}`}
                             >
-                                LKR {item.price}
+                                {userData ? `LKR ${item.price}` : 'Login'}
                             </button>
                         </div>
                     ))}
