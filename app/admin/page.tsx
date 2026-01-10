@@ -414,7 +414,7 @@ function SettingsEditor() {
 export default function AdminPage() {
     const { userData, loading } = useAuth();
     const router = useRouter();
-    const [activeTab, setActiveTab] = useState<'pending' | 'approved' | 'rejected' | 'settings'>('pending');
+    const [activeTab, setActiveTab] = useState<'pending' | 'approved' | 'rejected' | 'settings' | 'usage'>('pending');
     const [payments, setPayments] = useState<any[]>([]);
     const [fetching, setFetching] = useState(false);
 
@@ -432,7 +432,7 @@ export default function AdminPage() {
 
     // Fetch Data
     const loadData = async () => {
-        if (activeTab === 'settings') return;
+        if (activeTab === 'settings' || activeTab === 'usage') return;
         setFetching(true);
         try {
             const data = await getPayments(activeTab);
