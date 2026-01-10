@@ -15,6 +15,7 @@ export interface BookData {
     type: 'book';
     isPinned?: boolean;
     isTrashed?: boolean;
+    trashedAt?: string;
 }
 
 const COLLECTION_NAME = 'books';
