@@ -46,6 +46,8 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string; payload: any } | null>(null);
     const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+    const [menuPosition, setMenuPosition] = useState({ x: 0, y: 0 });
+    const downloadBtnRef = useRef<HTMLButtonElement>(null);
     // Track expanded lines (Visual only, resets on reload)
     const [expandedLines, setExpandedLines] = useState<Set<number>>(new Set());
 
@@ -1214,8 +1216,24 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         {/* Download Button */}
                         <div className="relative">
                             <button
+                                ref={downloadBtnRef}
                                 onClick={(e) => {
                                     e.stopPropagation();
+                                    if (!downloadMenuOpen && downloadBtnRef.current) {
+                                        const rect = downloadBtnRef.current.getBoundingClientRect();
+                                        // Position above the button, aligned to the left (or right)
+                                        // Since the button is in a centered bar, fixed coord is safest.
+                                        setMenuPosition({
+                                            x: rect.left,
+                                            y: window.innerHeight - rect.top + 8 // 8px padding from bottom of rect top? No, we want it ABOVE the button.
+                                        });
+                                        // Actually, bottom property for fixed pos is distance from bottom edge.
+                                        // If we use top/left:
+                                        // top: rect.top - menuHeight. We don't know menu height easily.
+                                        // bottom: window.innerHeight - rect.top + margin.
+                                        // Yes, using `bottom` is better if we want it to grow upwards.
+                                        // The style below uses `left` and `bottom`.
+                                    }
                                     setDownloadMenuOpen(!downloadMenuOpen);
                                 }}
                                 className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white transition-colors"
@@ -1227,19 +1245,6 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                     <line x1="12" y1="15" x2="12" y2="3" />
                                 </svg>
                             </button>
-                            {downloadMenuOpen && (
-                                <div className="absolute bottom-full right-0 mb-2 min-w-[180px] bg-zinc-900 rounded-lg shadow-xl border border-white/10 overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col z-[50]">
-                                    <button onClick={handleDownloadHTML} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
-                                        <span className="text-orange-500 font-bold">HTML</span> Download as HTML
-                                    </button>
-                                    <button onClick={handleDownloadSVG} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
-                                        <span className="text-blue-500 font-bold">SVG</span> Download as SVG
-                                    </button>
-                                    <button onClick={handleDownloadText} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
-                                        <span className="text-gray-500 font-bold">TXT</span> Download as Note
-                                    </button>
-                                </div>
-                            )}
                         </div>
 
                         <button onClick={handleFit} className="px-3 h-8 flex items-center justify-center rounded-full hover:bg-white/10 text-gray-300 hover:text-white text-xs font-medium transition-colors" title="Fit to Screen">
@@ -1294,6 +1299,29 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     </button>
                 </div>
             </div>
+
+            {/* Download Menu (Fixed Position) */}
+            {downloadMenuOpen && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        left: menuPosition.x,
+                        bottom: menuPosition.y,
+                        zIndex: 100,
+                    }}
+                    className="min-w-[180px] bg-zinc-900 rounded-lg shadow-xl border border-white/10 overflow-hidden animate-in fade-in zoom-in-95 duration-100 flex flex-col"
+                >
+                    <button onClick={handleDownloadHTML} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
+                        <span className="text-orange-500 font-bold">HTML</span> Download as HTML
+                    </button>
+                    <button onClick={handleDownloadSVG} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
+                        <span className="text-blue-500 font-bold">SVG</span> Download as SVG
+                    </button>
+                    <button onClick={handleDownloadText} className="w-full text-left px-4 py-2 text-sm hover:bg-white/10 text-gray-200 flex items-center gap-2">
+                        <span className="text-gray-500 font-bold">TXT</span> Download as Note
+                    </button>
+                </div>
+            )}
 
             {/* Onboarding Tooltip */}
             {showOnboarding && viewMode === 'visual' && (
