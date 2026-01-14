@@ -257,14 +257,59 @@ export default function BookEditor() {
 
         c.on('object:modified', saveState);
         c.on('object:added', saveState);
-        c.on('path:created', saveState);
+        // c.on('path:created', saveState); // Removed to prevent double-fire
         c.on('object:removed', saveState);
 
         // Load Content
         if (pages[currentPage]) {
-            c.loadFromJSON(pages[currentPage], () => {
+            // Fix: Replace invalid 'alphabetical' with 'alphabetic' before loading
+            // Method 1: String Regex (Broadened for potential whitespace)
+            let contentStr = typeof pages[currentPage] === 'string'
+                ? pages[currentPage]
+                : JSON.stringify(pages[currentPage]);
+
+            let sanitizedJson = contentStr.replace(/"textBaseline"\s*:\s*"alphabetical"/g, '"textBaseline":"alphabetic"');
+
+            let pageData;
+            try {
+                pageData = JSON.parse(sanitizedJson);
+            } catch (e) {
+                console.error("Failed to parse sanitized JSON, falling back to original", e);
+                // Try parsing original if sanitized failed (unlikely)
+                try {
+                    pageData = typeof pages[currentPage] === 'string' ? JSON.parse(pages[currentPage]) : pages[currentPage];
+                } catch (e2) {
+                    pageData = {};
+                }
+            }
+
+            // Method 2: Recursive Object Sanitization (Guarantee)
+            // Traverses the object to catch any instances missed by Regex
+            const recursiveSanitize = (obj: any) => {
+                if (!obj || typeof obj !== 'object') return;
+
+                if (obj.textBaseline === 'alphabetical') {
+                    obj.textBaseline = 'alphabetic';
+                }
+
+                // Array
+                if (Array.isArray(obj)) {
+                    obj.forEach(item => recursiveSanitize(item));
+                    return;
+                }
+
+                // Object keys
+                Object.keys(obj).forEach(key => {
+                    recursiveSanitize(obj[key]);
+                });
+            };
+
+            recursiveSanitize(pageData);
+
+            c.loadFromJSON(pageData, () => {
                 c.renderAll();
-                saveState({}); // Initial State
+                // Ensure we don't double-fire save here if not needed
+                saveState({});
             });
         } else {
             saveState({}); // Initial State
