@@ -52,7 +52,8 @@ function customNodeToMarkdown(node: CustomNode, depth: number = 0): string {
     const indent = '  '.repeat(Math.max(0, depth - 1));
     const prefix = depth === 0 ? '# ' : `${indent}- `;
     
-    const lines = (node.content || '').split('\n');
+    const contentStr = typeof node.content === 'string' ? node.content : String(node.content || '');
+    const lines = contentStr.split('\n');
     const continuationIndent = depth === 0 ? '' : indent + '  ';
     const formattedContent = lines.map((line, idx) => idx === 0 ? `${prefix}${line}` : `${continuationIndent}${line}`).join('\n');
     
@@ -106,7 +107,7 @@ const forceDownloadMedia = async (src: string) => {
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = proxyUrl;
-        a.download = src.split('/').pop()?.split('?')[0] || 'mindmap-media';
+        a.download = String(src || '').split('/').pop()?.split('?')[0] || 'mindmap-media';
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

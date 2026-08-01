@@ -113,7 +113,7 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
             }
         }
 
-        const parsed = decodedInitialValue.split('\n')
+        const parsed = String(decodedInitialValue || '').split('\n')
             .filter(line => line.trim() !== '') // Ignore empty lines
             .map((line, i) => {
                 const match = line.trim().match(/^-\s\[( |x)\]\s(.*)/);
