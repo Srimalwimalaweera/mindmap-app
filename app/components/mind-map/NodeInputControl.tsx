@@ -731,28 +731,49 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                             </div>
 
                             <div className="flex flex-col gap-2">
-                                <div
-                                    onClick={() => fileInputRef.current?.click()}
-                                    className={`border-2 border-dashed border-slate-700/80 hover:border-purple-500/60 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/80 transition-colors ${isCompressing || isUploading ? 'opacity-50 pointer-events-none' : ''}`}
-                                >
-                                    <input
-                                        ref={fileInputRef}
-                                        type="file"
-                                        className="hidden"
-                                        accept={mediaType === 'image' ? 'image/*' : 'video/*'}
-                                        onChange={handleFileUpload}
-                                    />
-                                    <Film size={20} className="text-purple-400 mb-1" />
-                                    <span className="text-xs font-medium text-slate-200">
-                                        {isCompressing ? "Processing file..." : mediaUrl ? `Click to Replace ${mediaType === 'image' ? 'Image (<4MB)' : 'Video (<25MB)'}` : `Click to Choose ${mediaType === 'image' ? 'Image (<4MB)' : 'Video (<25MB)'}`}
-                                    </span>
-                                    <span className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
-                                        {mediaType === 'image' ? (
-                                            <span className="text-yellow-400 flex items-center gap-1">⭐ Requires Pro Plan (Auto Compressed)</span>
-                                        ) : (
-                                            <span className="text-purple-400 flex items-center gap-1">⭐ Requires Ultra Plan (Max 25MB)</span>
-                                        )}
-                                    </span>
+                                <div className="relative overflow-hidden rounded-xl">
+                                    <div
+                                        onClick={() => {
+                                            const isImageLocked = mediaType === 'image' && userPlan === 'free';
+                                            const isVideoLocked = mediaType === 'video' && userPlan !== 'ultra';
+                                            if (!isImageLocked && !isVideoLocked) fileInputRef.current?.click();
+                                        }}
+                                        className={`border-2 border-dashed border-slate-700/80 hover:border-purple-500/60 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/80 transition-colors ${isCompressing || isUploading || (mediaType === 'image' && userPlan === 'free') || (mediaType === 'video' && userPlan !== 'ultra') ? 'opacity-40' : ''}`}
+                                    >
+                                        <input
+                                            ref={fileInputRef}
+                                            type="file"
+                                            className="hidden"
+                                            accept={mediaType === 'image' ? 'image/*' : 'video/*'}
+                                            onChange={handleFileUpload}
+                                        />
+                                        <Film size={20} className="text-purple-400 mb-1" />
+                                        <span className="text-xs font-medium text-slate-200">
+                                            {isCompressing ? "Processing file..." : mediaUrl ? `Click to Replace ${mediaType === 'image' ? 'Image (<4MB)' : 'Video (<25MB)'}` : `Click to Choose ${mediaType === 'image' ? 'Image (<4MB)' : 'Video (<25MB)'}`}
+                                        </span>
+                                        <span className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                                            {mediaType === 'image' ? (
+                                                <span className="text-yellow-400 flex items-center gap-1">⭐ Requires Pro Plan (Auto Compressed)</span>
+                                            ) : (
+                                                <span className="text-purple-400 flex items-center gap-1">⭐ Requires Ultra Plan (Max 25MB)</span>
+                                            )}
+                                        </span>
+                                    </div>
+
+                                    {/* Lock Overlay */}
+                                    {((mediaType === 'image' && userPlan === 'free') || (mediaType === 'video' && userPlan !== 'ultra')) && (
+                                        <div className={`absolute inset-0 backdrop-blur-[2px] flex flex-col items-center justify-center z-10 rounded-xl ${mediaType === 'image' ? 'bg-yellow-500/10' : 'bg-purple-500/10'}`}>
+                                            <span className="text-xs font-bold text-white mb-2 drop-shadow-md">
+                                                {mediaType === 'image' ? 'Unlock Image Attach Feature' : 'Unlock Video Attach Feature'}
+                                            </span>
+                                            <button 
+                                                onClick={() => setShowPricingModal(true)}
+                                                className={`px-4 py-1.5 rounded-full text-xs font-bold text-white shadow-lg transition-transform hover:scale-105 active:scale-95 ${mediaType === 'image' ? 'bg-gradient-to-r from-yellow-500 to-amber-600 shadow-yellow-500/25' : 'bg-gradient-to-r from-purple-500 to-fuchsia-600 shadow-purple-500/25'}`}
+                                            >
+                                                {mediaType === 'image' ? 'Upgrade to Pro' : 'Upgrade to Ultra'}
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="relative">
