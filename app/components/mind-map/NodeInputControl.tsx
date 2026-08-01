@@ -709,23 +709,23 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                             <div className="flex items-center gap-2 bg-slate-800/60 p-1.5 rounded-xl border border-slate-700/50">
                                 <button
                                     onClick={() => setMediaType('image')}
-                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${mediaType === 'image' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${mediaType === 'image' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
                                 >
                                     <ImageIcon size={13} />
                                     <span>Image</span>
-                                    <span className="flex items-center gap-0.5 text-[9px] bg-yellow-500/20 text-yellow-300 px-1.5 py-0.5 rounded-full border border-yellow-500/30">
-                                        👑 PRO
+                                    <span className="flex items-center justify-center bg-yellow-500/20 text-yellow-400 p-1 rounded-full border border-yellow-500/40">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2 20h20v2H2z"/><path d="m2 18 3-11 4 4 3-8 3 8 4-4 3 11z"/></svg>
                                     </span>
                                 </button>
 
                                 <button
                                     onClick={() => setMediaType('video')}
-                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${mediaType === 'video' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${mediaType === 'video' ? 'bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
                                 >
                                     <Video size={13} />
                                     <span>Video</span>
-                                    <span className="flex items-center gap-0.5 text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded-full border border-purple-500/30">
-                                        👑 ULTRA
+                                    <span className="flex items-center justify-center bg-purple-500/20 text-purple-400 p-1 rounded-full border border-purple-500/40">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M2 20h20v2H2z"/><path d="m2 18 3-11 4 4 3-8 3 8 4-4 3 11z"/></svg>
                                     </span>
                                 </button>
                             </div>
