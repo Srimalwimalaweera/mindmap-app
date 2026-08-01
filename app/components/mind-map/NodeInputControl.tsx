@@ -137,7 +137,7 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
     // Robust Category Matching
     const isCodeContent = decodedInitialValue.includes('```') || (decodedInitialValue.startsWith('`') && decodedInitialValue.endsWith('`')) || decodedInitialValue.includes('data-category="code"');
     const isLinkContent = decodedInitialValue.includes('data-category="link"') || !!decodedInitialValue.match(/\[.*?\]\(.*?\)/);
-    const isMediaContent = decodedInitialValue.includes('<video') || decodedInitialValue.includes('![');
+    const isMediaContent = decodedInitialValue.includes('<video') || decodedInitialValue.includes('![') || decodedInitialValue.includes('<img') || decodedInitialValue.includes('media-placeholder-container');
     const isTableContent = !isCodeContent && !isLinkContent && (decodedInitialValue.includes('<table>') || decodedInitialValue.includes('<table') || (decodedInitialValue.includes('|') && decodedInitialValue.includes('---')));
 
     const initialCategory: NodeCategory = isEditingExisting
@@ -174,13 +174,14 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
     });
 
     // Media State
-    const [mediaUrl, setMediaUrl] = useState(() => {
-        const matchImg = decodedInitialValue.match(/!\[.*?\]\((.*?)\)/);
-        const matchVid = decodedInitialValue.match(/src=["'](.*?)["']/);
-        return matchImg ? matchImg[1] : matchVid ? matchVid[1] : '';
+    const [originalMediaUrl] = useState(() => {
+        const matchImgMd = decodedInitialValue.match(/!\[.*?\]\((.*?)\)/);
+        const matchSrc = decodedInitialValue.match(/src=["'](.*?)["']/);
+        return matchImgMd ? matchImgMd[1] : matchSrc ? matchSrc[1] : '';
     });
+    const [mediaUrl, setMediaUrl] = useState(originalMediaUrl);
     const [mediaType, setMediaType] = useState<'image' | 'video'>(() => {
-        return decodedInitialValue.includes('<video') ? 'video' : 'image';
+        return (decodedInitialValue.includes('<video') || decodedInitialValue.includes('data-type="video"')) ? 'video' : 'image';
     });
     const [isCompressing, setIsCompressing] = useState(false);
     const [pendingFile, setPendingFile] = useState<Blob | File | null>(null);
@@ -418,9 +419,9 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                     const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
                     
                     // If replacing an existing media, delete the old one
-                    if (mediaUrl && mediaUrl.includes('firebasestorage.googleapis.com')) {
+                    if (originalMediaUrl && originalMediaUrl.includes('firebasestorage.googleapis.com')) {
                         try {
-                            const matches = mediaUrl.match(/\/o\/(.*?)\?alt=media/);
+                            const matches = originalMediaUrl.match(/\/o\/(.*?)\?alt=media/);
                             if (matches && matches[1]) {
                                 const filePath = decodeURIComponent(matches[1]);
                                 const fileRef = ref(storage, filePath);
@@ -443,6 +444,20 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                 }
             );
             return;
+        }
+
+        // If they pasted a new URL manually or removed it, and there was an original Firebase media URL, delete it.
+        if (category === 'media' && originalMediaUrl && originalMediaUrl !== mediaUrl && originalMediaUrl.includes('firebasestorage.googleapis.com')) {
+            try {
+                const matches = originalMediaUrl.match(/\/o\/(.*?)\?alt=media/);
+                if (matches && matches[1]) {
+                    const filePath = decodeURIComponent(matches[1]);
+                    const fileRef = ref(storage, filePath);
+                    await deleteObject(fileRef);
+                }
+            } catch (e) {
+                console.error("Failed to delete replaced media URL", e);
+            }
         }
 
         // Wait, if they replaced the text input URL but didn't choose a pending file,
