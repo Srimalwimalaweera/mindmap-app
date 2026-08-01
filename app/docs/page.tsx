@@ -21,8 +21,7 @@ export default function DocsPage() {
                             Visual Mind Map is a powerful tool to organize your thoughts. Start by creating a new project from the dashboard.
                         </p>
                         <ul className="list-disc list-inside text-gray-300 space-y-2">
-                            <li>Click <span className="font-bold text-white">Create New Project</span> on the dashboard.</li>
-                            <li>Select "Mind Map" or "Digital Book".</li>
+                            <li>Click on "Create New Mind Map" in your dashboard.</li>
                             <li>Give your project a name to begin.</li>
                         </ul>
                     </div>

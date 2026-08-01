@@ -15,26 +15,47 @@ import Header from '@/app/components/Header';
 import AutoSaveControl from '@/app/components/AutoSaveControl';
 import LoadingScreen from '@/app/components/LoadingScreen';
 
-// const MindMapEditor = dynamic(() => import('@/app/components/MindMapEditor'), { ssr: false });
-export const runtime = 'edge';
-
 import { useAuth } from '@/app/context/AuthProvider';
-// ...
+import { CustomNode } from '@/app/types/mindmap';
+import { Transformer } from 'markmap-lib';
+
+function convertMarkdownToCustomNode(markdown: string): CustomNode {
+    const transformer = new Transformer();
+    const { root } = transformer.transform(markdown);
+    
+    const convert = (inode: any): CustomNode => {
+        return {
+            id: `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+            content: inode.content || '',
+            children: (inode.children || []).map(convert),
+            payload: inode.payload
+        };
+    };
+    
+    return convert(root);
+}
+
+const DEFAULT_MAP: CustomNode = {
+    id: 'root-default',
+    content: 'Project Name',
+    children: [
+        { id: 'child-1', content: 'Child 1', children: [] },
+        { id: 'child-2', content: 'Child 2', children: [] }
+    ]
+};
 
 export default function MapEditorPage({ params }: { params: Promise<{ id: string }> }) {
     // Unwrap params using React.use()
     const { id } = use(params);
 
-    const { state: markdown, set: setMarkdown, reset: resetMarkdown, undo, redo, canUndo, canRedo } = useUndoRedo('', 50);
+    const { state: mapData, set: setMapData, reset: resetMapData, undo, redo, canUndo, canRedo } = useUndoRedo<CustomNode>(DEFAULT_MAP, 50);
     const { user, loading: authLoading } = useAuth(); // Global Auth
     const loading = authLoading;
     const [saving, setSaving] = useState(false);
-    const [lastSavedMarkdown, setLastSavedMarkdown] = useState('');
+    const [lastSavedData, setLastSavedData] = useState<CustomNode>(DEFAULT_MAP);
     const [autoSaveInterval, setAutoSaveInterval] = useState(30 * 60 * 1000); // Default 30 min
     const [scheduledSaveTime, setScheduledSaveTime] = useState<number | null>(null);
     const router = useRouter();
-
-    // Removed local useEffect for onAuthStateChanged
 
     // Initial Load
     useEffect(() => {
@@ -43,13 +64,19 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
             try {
                 const content = await getMindMap(id);
                 if (isMounted && content) {
-                    resetMarkdown(content);
-                    setLastSavedMarkdown(content);
+                    let parsedData: CustomNode;
+                    if (typeof content === 'string') {
+                        // Migrate old markdown map to new CustomNode AST!
+                        parsedData = convertMarkdownToCustomNode(content);
+                        // Optional: auto-save immediately to upgrade DB
+                    } else {
+                        parsedData = content as CustomNode;
+                    }
+                    resetMapData(parsedData);
+                    setLastSavedData(parsedData);
                 } else if (isMounted) {
-                    // Fallback for new empty map or error
-                    const initialContent = '# Root Node\n## Child 1\n## Child 2';
-                    resetMarkdown(initialContent);
-                    setLastSavedMarkdown(initialContent);
+                    resetMapData(DEFAULT_MAP);
+                    setLastSavedData(DEFAULT_MAP);
                 }
             } catch (err) {
                 console.error("Failed to load map", err);
@@ -57,14 +84,14 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
         };
         loadMap();
         return () => { isMounted = false; };
-    }, [id, resetMarkdown]);
+    }, [id, resetMapData]);
 
-    const handleSave = async () => {
+    const handleSave = async (dataToSave = mapData) => {
         if (!user) return;
         setSaving(true);
         try {
-            await saveMindMap(id, markdown);
-            setLastSavedMarkdown(markdown);
+            await saveMindMap(id, dataToSave);
+            setLastSavedData(dataToSave);
             console.log("Saved");
         } catch (error) {
             console.error("Error saving mind map:", error);
@@ -81,7 +108,7 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
         if (!user || autoSaveInterval <= 0) return;
 
         // If content is same as last saved, clear any pending save
-        if (markdown === lastSavedMarkdown) {
+        if (JSON.stringify(mapData) === JSON.stringify(lastSavedData)) {
             setScheduledSaveTime(null);
             return;
         }
@@ -101,7 +128,7 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
         }, autoSaveInterval);
 
         return () => clearTimeout(timer);
-    }, [user, autoSaveInterval, markdown, lastSavedMarkdown]); // Note: removed 'saving' dependency to avoid loops, saving status is checked inside
+    }, [mapData, lastSavedData, user, autoSaveInterval, saving]);
 
     const handleBack = () => {
         router.push('/');
@@ -125,9 +152,9 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
 
             <main className="flex-1 relative">
                 <MindMapEditor
-                    markdown={markdown}
-                    onMarkdownChange={(newMd) => {
-                        setMarkdown(newMd);
+                    mapData={mapData}
+                    onMapDataChange={(newData: CustomNode) => {
+                        setMapData(newData);
                     }}
                     onUndo={undo}
                     onRedo={redo}

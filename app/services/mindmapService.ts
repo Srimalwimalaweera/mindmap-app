@@ -1,30 +1,35 @@
 import { db } from "@/lib/firebase";
 import { collection, doc, getDoc, getDocs, query, where, addDoc, updateDoc, deleteDoc, writeBatch, increment, getCountFromServer } from "firebase/firestore";
+import { CustomNode } from "../types/mindmap";
 
 export interface MindMapData {
     id: string;
     userId: string;
     title: string;
-    content: string;
+    content: string | CustomNode;
     createdAt: string;
     updatedAt: string;
-    type: 'map' | 'book';
+    type?: 'map';
     isPinned?: boolean;
     isTrashed?: boolean;
     trashedAt?: string;
 }
 
-export async function createMindMap(userId: string, title: string, type: 'map' | 'book' = 'map') {
+export async function createMindMap(userId: string, title: string) {
     if (!userId) throw new Error("User ID is required");
 
-    // Initial content with the title as the root node
-    const content = `# ${title}`;
+    // Initial content is now a robust AST
+    const content: CustomNode = {
+        id: `root-${Date.now()}`,
+        content: title,
+        children: []
+    };
 
     const docData = {
         userId,
         title,
         content,
-        type,
+        type: 'map',
         isPinned: false,
         isTrashed: false,
         createdAt: new Date().toISOString(),
@@ -36,14 +41,10 @@ export async function createMindMap(userId: string, title: string, type: 'map' |
     // Update User Stats
     try {
         const userRef = doc(db, "users", userId);
-        const updatePayload: any = {
+        await updateDoc(userRef, {
             projectCount: increment(1),
-            totalMaps: increment(1) // Total created all time
-        };
-        if (type === 'book') {
-            updatePayload.totalBooks = increment(1);
-        }
-        await updateDoc(userRef, updatePayload);
+            totalMaps: increment(1)
+        });
     } catch (e) {
         console.error("Error updating user stats", e);
     }
@@ -63,7 +64,7 @@ export async function getUserMindMaps(userId: string): Promise<MindMapData[]> {
     })) as MindMapData[];
 }
 
-export async function saveMindMap(mapId: string, content: string) {
+export async function saveMindMap(mapId: string, content: string | CustomNode) {
     if (!mapId) throw new Error("Map ID is required");
 
     const mapRef = doc(db, "markmaps", mapId);
@@ -73,14 +74,14 @@ export async function saveMindMap(mapId: string, content: string) {
     });
 }
 
-export async function getMindMap(mapId: string): Promise<string | null> {
+export async function getMindMap(mapId: string): Promise<string | CustomNode | null> {
     if (!mapId) return null;
 
     const mapRef = doc(db, "markmaps", mapId);
     const snapshot = await getDoc(mapRef);
 
     if (snapshot.exists()) {
-        return snapshot.data().content as string;
+        return snapshot.data().content as string | CustomNode;
     }
     return null;
 }
@@ -148,35 +149,23 @@ export async function emptyTrash(userId: string) {
 }
 
 export async function getUserRealtimeCounts(userId: string) {
-    if (!userId) return { maps: 0, books: 0 };
+    if (!userId) return { maps: 0 };
 
     try {
         const coll = collection(db, "markmaps");
 
-        // Count Maps
         const qMaps = query(
             coll,
             where("userId", "==", userId),
-            where("type", "==", "map"),
             where("isTrashed", "==", false)
         );
         const snapMaps = await getCountFromServer(qMaps);
 
-        // Count Books
-        const qBooks = query(
-            coll,
-            where("userId", "==", userId),
-            where("type", "==", "book"),
-            where("isTrashed", "==", false)
-        );
-        const snapBooks = await getCountFromServer(qBooks);
-
         return {
-            maps: snapMaps.data().count,
-            books: snapBooks.data().count
+            maps: snapMaps.data().count
         };
     } catch (e) {
         console.error("Error fetching counts", e);
-        return { maps: 0, books: 0 };
+        return { maps: 0 };
     }
 }

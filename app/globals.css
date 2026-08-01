@@ -25,6 +25,31 @@ body {
   font-family: Arial, Helvetica, sans-serif;
 }
 
+/* Custom Scrollbar for Code Elements */
+.code-scroll-container::-webkit-scrollbar,
+.code-textarea::-webkit-scrollbar,
+.fullscreen-code-container::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.code-scroll-container::-webkit-scrollbar-track,
+.code-textarea::-webkit-scrollbar-track,
+.fullscreen-code-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.code-scroll-container::-webkit-scrollbar-thumb,
+.code-textarea::-webkit-scrollbar-thumb,
+.fullscreen-code-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+.code-scroll-container::-webkit-scrollbar-thumb:hover,
+.code-textarea::-webkit-scrollbar-thumb:hover,
+.fullscreen-code-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
 .markmap-svg text,
 .markmap-svg foreignObject,
 .markmap-svg foreignObject div,
@@ -93,4 +118,42 @@ body {
 
 .animate-spin-slow {
   animation: spin-slow 3s linear infinite;
+}
+
+/* Code node specific scrollbar styling */
+.code-node-container > div::-webkit-scrollbar,
+.fullscreen-code-container::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.code-node-container > div::-webkit-scrollbar-track,
+.fullscreen-code-container::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.code-node-container > div::-webkit-scrollbar-thumb,
+.fullscreen-code-container::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.code-node-container > div::-webkit-scrollbar-thumb:hover,
+.fullscreen-code-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* Media node video controls hover */
+.media-video-container video::-webkit-media-controls {
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.media-video-container:hover video::-webkit-media-controls {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .media-video-container video::-webkit-media-controls {
+    opacity: 1 !important;
+  }
 }

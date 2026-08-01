@@ -4,9 +4,14 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     Bold, Italic, Underline, Strikethrough, Highlighter,
     Link as LinkIcon, CheckSquare, Code, List, Table as TableIcon,
-    Image as ImageIcon, Video, X, Check, MonitorPlay, Film,
-    Maximize2, MoreHorizontal, MousePointerClick, Plus
+    Image as ImageIcon, Video, X, Check, Film, Plus,
+    Type, Sparkles, Trash2, Edit2, Grid
 } from 'lucide-react';
+import { useAuth } from '@/app/context/AuthProvider';
+import TableEditorModal from './TableEditorModal';
+import PricingModal from './PricingModal';
+import { storage } from '@/lib/firebase';
+import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebase/storage';
 
 interface NodeInputControlProps {
     initialValue: string;
@@ -15,8 +20,7 @@ interface NodeInputControlProps {
     nodeId: string;
 }
 
-type InputMode = 'text' | 'link' | 'list' | 'table' | 'media' | 'code';
-
+type NodeCategory = 'text' | 'task' | 'link' | 'media' | 'table' | 'code';
 
 interface TaskItem {
     id: string;
@@ -24,24 +28,53 @@ interface TaskItem {
     checked: boolean;
 }
 
-export default function NodeInputControl({ initialValue, onSubmit, onCancel }: NodeInputControlProps) {
-    // Parsing initial value for Task/List Mode
-    // We support "Block List Mode" where multiple lines can be detected as a list.
-    // Enhanced to support HTML Lists for better Markmap rendering inside single node.
+// Decode HTML Entities (e.g. &#xd85;... -> Sinhala/Unicode Text)
+const decodeHtmlEntities = (text: string): string => {
+    if (!text) return '';
+    return text.replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+        .replace(/&#([0-9]+);/g, (_, dec) => String.fromCharCode(parseInt(dec, 10)))
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#039;/g, "'");
+};
 
-    // Check for HTML List wrapper
-    const htmlListMatch = initialValue.match(/^<(ul|ol)([\s\S]*)<\/\1>/);
+export default function NodeInputControl({ initialValue, onSubmit, onCancel, nodeId }: NodeInputControlProps) {
+    const { userData } = useAuth();
+    const userPlan = userData?.plan || 'free';
+
+    // Decode initial value
+    const decodedInitialValue = decodeHtmlEntities(initialValue);
+
+    // Is Editing an Existing Node?
+    const isNewNode = nodeId === 'NEW_CHILD' || nodeId === 'INSERT_PARENT' || nodeId === 'GHOST' || !decodedInitialValue || decodedInitialValue.includes('@[[ADD_NEW]]');
+    const isEditingExisting = !isNewNode && decodedInitialValue.trim() !== '';
+
+    // Action Titles
+    const actionTitle = nodeId === 'NEW_CHILD'
+        ? 'Add Child Node'
+        : nodeId === 'INSERT_PARENT'
+            ? 'Add Main Node'
+            : isNewNode
+                ? 'Create New Node'
+                : 'Edit Node Content';
+
+    const actionColor = nodeId === 'NEW_CHILD'
+        ? 'from-blue-500 to-indigo-600'
+        : nodeId === 'INSERT_PARENT'
+            ? 'from-purple-500 to-pink-600'
+            : 'from-amber-500 to-orange-600';
+
+    // Parse Initial Content
+    const htmlListMatch = decodedInitialValue.match(/^<(ul|ol)([\s\S]*)<\/\1>/);
     let isHtmlList = !!htmlListMatch;
     let htmlListType: 'bullet' | 'ordered' = htmlListMatch?.[1] === 'ol' ? 'ordered' : 'bullet';
-    let cleanText = initialValue;
+    let cleanText = decodedInitialValue;
 
     if (isHtmlList && htmlListMatch) {
-        // Extract LI items to Markdown for editing
         const inner = htmlListMatch[2];
-        // Regex to find <li>content</li>
         const items = [...inner.matchAll(/<li>([\s\S]*?)<\/li>/g)].map(m => m[1]);
-
-        // Convert back to Markdown lines with markers for "Explicit Editing"
         if (htmlListType === 'ordered') {
             cleanText = items.map((item, i) => `${i + 1}. ${item}`).join('\n');
         } else {
@@ -49,771 +82,849 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel }: N
         }
     }
 
-    const lines = cleanText.split('\n');
-    const firstLine = lines[0] || '';
+    const taskRegex = /^\s*-\s\[( |x)\]\s/m;
+    const htmlTaskRegex = /<ul class="checklist"/;
+    const listRegex = /^\s*(-\s|\d+\.\s)/m;
 
-    // Regex
-    const taskRegex = /^-\s\[( |x)\]\s/;
-    const htmlTaskRegex = /<ul class="checklist">/;
-    const listRegex = /^(-\s|\d+\.\s)/;
+    const taskMatch = cleanText.match(taskRegex);
+    const htmlTaskMatch = decodedInitialValue.match(htmlTaskRegex);
+    const listMatch = cleanText.match(listRegex);
 
-    // Detect mode based on first line
-    const taskMatch = firstLine.match(taskRegex);
-    const htmlTaskMatch = initialValue.match(htmlTaskRegex);
-    const listMatch = firstLine.match(listRegex);
-
-    // Check HTML Task first
-    let initialIsTask = !!taskMatch || !!htmlTaskMatch; // Logic update: accept HTML or Markdown as valid initial Task
-
-    // Only detect markdown list if NOT html list (or if html parsing failed but looked like markdown)
+    const initialIsTask = !!taskMatch || !!htmlTaskMatch;
     const initialIsList = isHtmlList || (!!listMatch && !initialIsTask);
-    const initialListType = isHtmlList ? htmlListType : (listMatch ? (listMatch[1].startsWith('1') ? 'ordered' : 'bullet') : 'bullet');
+    const initialListType = isHtmlList ? htmlListType : (listMatch ? (listMatch[1].trim().startsWith('1') ? 'ordered' : 'bullet') : 'bullet');
 
-    const initialChecked = taskMatch ? taskMatch[1] === 'x' : false;
-
-    // STRIP Task styling for "Clean Input" mode
     if (initialIsTask) {
         cleanText = cleanText.replace(taskRegex, '');
     }
 
-    // Generate initial task items if it was a task list
+    // Generate Task Items
     const initialTaskItems: TaskItem[] = (() => {
-        if (!initialIsTask) return [];
+        if (!initialIsTask) return [{ id: `item-1`, text: '', checked: false }];
 
-        // Priority: HTML Parser
-        if (initialValue.includes('<ul class="checklist">')) {
-            const matches = [...initialValue.matchAll(/<li><input type="checkbox" (checked )?disabled \/> (.*?)<\/li>/g)];
+        if (decodedInitialValue.includes('<ul class="checklist"')) {
+            const matches = [...decodedInitialValue.matchAll(/<li[^>]*>\s*<input type="checkbox" (checked )?style="[^"]*" \/>\s*<span[^>]*>(.*?)<\/span>\s*<\/li>/g)];
             if (matches.length > 0) {
                 return matches.map((m, i) => ({
                     id: `item-${Date.now()}-${i}`,
-                    checked: !!m[1], // "checked " exists
-                    text: m[2]
+                    checked: !!m[1],
+                    text: decodeHtmlEntities(m[2])
                 }));
             }
         }
 
-        return initialValue.split('\n').map((line, i) => {
-            const match = line.match(/^-\s\[( |x)\]\s(.*)/);
-            if (match) {
+        const parsed = decodedInitialValue.split('\n')
+            .filter(line => line.trim() !== '') // Ignore empty lines
+            .map((line, i) => {
+                const match = line.trim().match(/^-\s\[( |x)\]\s(.*)/);
+                if (match) {
+                    return {
+                        id: `item-${Date.now()}-${i}`,
+                        checked: match[1] === 'x',
+                        text: decodeHtmlEntities(match[2])
+                    };
+                }
                 return {
                     id: `item-${Date.now()}-${i}`,
-                    checked: match[1] === 'x',
-                    text: match[2]
+                    checked: false,
+                    text: decodeHtmlEntities(line)
                 };
-            }
-            return {
-                id: `item-${Date.now()}-${i}`,
-                checked: false,
-                text: line
-            };
-        });
+            });
+
+        return parsed.length > 0 ? parsed : [{ id: `item-1`, text: '', checked: false }];
     })();
 
+    // Robust Category Matching
+    const isCodeContent = decodedInitialValue.includes('```') || (decodedInitialValue.startsWith('`') && decodedInitialValue.endsWith('`')) || decodedInitialValue.includes('data-category="code"');
+    const isLinkContent = decodedInitialValue.includes('data-category="link"') || !!decodedInitialValue.match(/\[.*?\]\(.*?\)/);
+    const isMediaContent = decodedInitialValue.includes('<video') || decodedInitialValue.includes('![');
+    const isTableContent = !isCodeContent && !isLinkContent && (decodedInitialValue.includes('<table>') || decodedInitialValue.includes('<table') || (decodedInitialValue.includes('|') && decodedInitialValue.includes('---')));
+
+    const initialCategory: NodeCategory = isEditingExisting
+        ? (initialIsTask ? 'task'
+            : isCodeContent ? 'code'
+                : isLinkContent ? 'link'
+                    : isTableContent ? 'table'
+                        : isMediaContent ? 'media'
+                            : 'text')
+        : 'text';
+
+    const [category, setCategory] = useState<NodeCategory>(initialCategory);
     const [value, setValue] = useState(cleanText);
-    const [isTask, setIsTask] = useState(initialIsTask);
-
-    // Checklist State
     const [taskItems, setTaskItems] = useState<TaskItem[]>(initialTaskItems);
-    const itemRefs = useRef(new Map<string, HTMLInputElement>());
-
-    // List State
     const [isList, setIsList] = useState(initialIsList);
     const [listType, setListType] = useState<'bullet' | 'ordered'>(initialListType as 'bullet' | 'ordered');
 
-    const [mode, setMode] = useState<InputMode>('text');
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const itemRefs = useRef(new Map<string, HTMLInputElement>());
 
-    // Combine for Submit
-    const getFinalValue = (val: string) => {
-        const lines = val.split('\n').filter(l => l.trim() !== '');
+    const htmlLinkMatch = decodedInitialValue.match(/<a href="([^"]*)"[^>]*data-category="link"[^>]*>.*?<\/svg>(.*?)<\/a>/);
+    const mdLinkMatch = decodedInitialValue.match(/\[(.*?)\]\((.*?)\)/);
 
-        if (isTask) {
-            // Checkbox Mode: Convert structured items to HTML Block
-            if (taskItems.length === 0) return val;
-            const listItems = taskItems.map(item =>
-                `<li><input type="checkbox" ${item.checked ? 'checked ' : ''}disabled /> ${item.text}</li>`
-            ).join('');
-            return `<ul class="checklist">${listItems}</ul>`;
-        }
+    // Link State
+    const [linkUrl, setLinkUrl] = useState(() => {
+        if (htmlLinkMatch) return htmlLinkMatch[1];
+        if (mdLinkMatch) return mdLinkMatch[2];
+        return '';
+    });
+    const [linkText, setLinkText] = useState(() => {
+        if (htmlLinkMatch) return htmlLinkMatch[2];
+        if (mdLinkMatch) return mdLinkMatch[1];
+        return '';
+    });
 
-        if (isList) {
-            // Output HTML Lists to keep it in ONE node
-            const openTag = listType === 'ordered' ? '<ol>' : '<ul>';
-            const closeTag = listType === 'ordered' ? '</ol>' : '</ul>';
+    // Media State
+    const [mediaUrl, setMediaUrl] = useState(() => {
+        const matchImg = decodedInitialValue.match(/!\[.*?\]\((.*?)\)/);
+        const matchVid = decodedInitialValue.match(/src=["'](.*?)["']/);
+        return matchImg ? matchImg[1] : matchVid ? matchVid[1] : '';
+    });
+    const [mediaType, setMediaType] = useState<'image' | 'video'>(() => {
+        return decodedInitialValue.includes('<video') ? 'video' : 'image';
+    });
+    const [isCompressing, setIsCompressing] = useState(false);
+    const [pendingFile, setPendingFile] = useState<Blob | File | null>(null);
+    const [isUploading, setIsUploading] = useState(false);
+    const [uploadProgress, setUploadProgress] = useState(0);
+    const [showPricingModal, setShowPricingModal] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
-            // Convert Markdown lines to HTML LIs
-            const listItems = lines.map(l => {
-                // Remove marker if present
-                let content = l.replace(/^(-\s|\d+\.\s)/, '');
-                return `<li>${content}</li>`;
-            }).join('');
+    // Table State
+    const [tableRows, setTableRows] = useState(3);
+    const [tableCols, setTableCols] = useState(3);
+    const [isTableModalOpen, setIsTableModalOpen] = useState(false);
 
-            // If empty, return just value? No, return formatted block.
-            if (lines.length === 0) return val;
+    const [mediaDimensions, setMediaDimensions] = useState<{width: number, height: number} | null>(null);
 
-            return `${openTag}${listItems}${closeTag}`;
-        }
-        return val;
+    // Code State
+    const [codeContent, setCodeContent] = useState(() => {
+        const htmlMatch = decodedInitialValue.match(/<pre[^>]*>([\s\S]*?)<\/pre>/);
+        if (htmlMatch) return htmlMatch[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+        const match = decodedInitialValue.match(/```([\s\S]*?)```/);
+        return match ? match[1].trim() : decodedInitialValue.startsWith('`') ? decodedInitialValue.replace(/`/g, '') : '';
+    });
+
+    // Client-Side Image Compression
+    const compressImageToBlob = (file: File): Promise<Blob> => {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = (event) => {
+                const img = new Image();
+                img.src = event.target?.result as string;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    let width = img.width;
+                    let height = img.height;
+                    const maxDim = 1200;
+
+                    if (width > maxDim || height > maxDim) {
+                        if (width > height) {
+                            height = Math.round((height * maxDim) / width);
+                            width = maxDim;
+                        } else {
+                            width = Math.round((width * maxDim) / height);
+                            height = maxDim;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx?.drawImage(img, 0, 0, width, height);
+
+                    canvas.toBlob((blob) => {
+                        if (blob) resolve(blob);
+                        else reject(new Error('Canvas to Blob failed'));
+                    }, 'image/jpeg', 0.7);
+                };
+                img.onerror = (err) => reject(err);
+            };
+            reader.onerror = (err) => reject(err);
+        });
     };
 
-    const handleSubmit = (val: string) => {
-        onSubmit(getFinalValue(val));
-    };
+    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
 
-    // Toggle Handlers
-    const toggleTask = () => {
-        if (isList) setIsList(false); // Mutually exclusive
-
-        const newIsTask = !isTask;
-        setIsTask(newIsTask);
-
-        if (newIsTask) {
-            // Convert current text to task items
-            const currentText = textareaRef.current ? textareaRef.current.value : value;
-            const lines = currentText.split('\n');
-            const newItems = lines.map((line, i) => ({
-                id: `item-${Date.now()}-${i}`,
-                checked: false,
-                text: line
-            }));
-            setTaskItems(newItems);
-            // Focus first item
-            setTimeout(() => {
-                const firstId = newItems[0]?.id;
-                if (firstId) itemRefs.current.get(firstId)?.focus();
-            }, 0);
-        } else {
-            // Convert task items back to text (clean)
-            const text = taskItems.map(t => t.text).join('\n');
-            setValue(text);
-            setTimeout(() => textareaRef.current?.focus(), 0);
+        if (!userData) {
+            alert("Please sign in to upload media.");
+            return;
         }
-    };
 
-    const toggleList = () => {
-        if (isTask) setIsTask(false); // Mutually exclusive
+        const isVideo = file.type.startsWith('video/');
 
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-
-        const currentVal = textarea.value; // OR use value state if sync is guaranteed
-        const lines = currentVal.split('\n');
-
-        let newLines = [...lines];
-        let newType: 'bullet' | 'ordered' = 'bullet';
-
-        if (isList) {
-            // Cycle: Bullet -> Ordered -> Off
-            if (listType === 'bullet') {
-                // Change to Ordered
-                newType = 'ordered';
-                setListType('ordered');
-                // Replace "- " with "1. ", "2. ", etc.
-                newLines = lines.map((line, i) => {
-                    return line.replace(/^-\s/, `${i + 1}. `);
-                });
-            } else {
-                // Turn Off
-                setIsList(false);
-                // Strip all markers
-                newLines = lines.map(line => {
-                    // Match start of line: whitespace, marker (- * + 1. 1)), whitespace
-                    return line.replace(/^(\s*)([-*+]|\d+[\.\)])\s+/, '$1');
-                });
+        if (isVideo) {
+            if (userPlan !== 'ultra') {
+                setShowPricingModal(true);
+                return;
+            }
+            if (file.size > 25 * 1024 * 1024) {
+                alert("Video file size exceeds the 25MB limit.");
+                return;
             }
         } else {
-            // Turn On (Bullet default)
-            setIsList(true);
-            setListType('bullet');
-            // Add "- " to all lines that don't have it?
-            newLines = lines.map(line => {
-                // If already has marker, keep it
-                if (line.match(/^(\s*)([-*+]|\d+[\.\)])\s+/)) return line;
-                return `- ${line}`;
-            });
+            if (userPlan === 'free') {
+                setShowPricingModal(true);
+                return;
+            }
+            if (file.size > 4 * 1024 * 1024) {
+                alert("Image file size exceeds 4MB. Compressing image...");
+            }
         }
 
-        const newValue = newLines.join('\n');
-        setValue(newValue);
+        try {
+            setIsCompressing(true);
+            setUploadProgress(0);
+            
+            let blobToUpload: Blob | File = file;
+            let ext = isVideo ? 'mp4' : 'jpg';
 
-        // Focus back
-        setTimeout(() => textarea.focus(), 0);
+            if (!isVideo) {
+                blobToUpload = await compressImageToBlob(file);
+            }
+
+            const localUrl = URL.createObjectURL(blobToUpload);
+            setMediaUrl(localUrl);
+            setMediaType(isVideo ? 'video' : 'image');
+            setPendingFile(blobToUpload);
+            
+            if (isVideo) {
+                const video = document.createElement('video');
+                video.src = localUrl;
+                video.onloadedmetadata = () => {
+                    setMediaDimensions({ width: video.videoWidth, height: video.videoHeight });
+                    setIsCompressing(false);
+                };
+            } else {
+                const img = new Image();
+                img.src = localUrl;
+                img.onload = () => {
+                    setMediaDimensions({ width: img.width, height: img.height });
+                    setIsCompressing(false);
+                };
+            }
+
+        } catch (err) {
+            console.error("Processing error", err);
+            alert("Error processing file.");
+            setIsCompressing(false);
+        }
     };
 
-    // --- Rich Text Handlers ---
+    const getFinalValue = (): string => {
+        if (category === 'task') {
+            const validTasks = taskItems.filter(t => t.text.trim() !== '');
+            if (validTasks.length === 0) return value;
+            const listItems = validTasks.map(item =>
+                `<li style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; padding: 4px 8px; background: rgba(255,255,255,0.05); border-radius: 6px;">
+                    <input type="checkbox" ${item.checked ? 'checked ' : ''}style="pointer-events: none; width: 14px; height: 14px; accent-color: #22c55e;" />
+                    <span style="opacity: ${item.checked ? '0.85' : '1'}; font-size: 14px;">${item.text}</span>
+                </li>`
+            ).join('');
+            return `<ul class="checklist" style="list-style: none; padding: 0; margin: 4px 0; display: flex; flex-direction: column; gap: 2px;">${listItems}</ul>`;
+        }
+
+        if (category === 'link') {
+            if (!linkUrl.trim()) return value || linkText;
+            const url = linkUrl.startsWith('http://') || linkUrl.startsWith('https://') ? linkUrl : `https://${linkUrl}`;
+            const label = linkText.trim() || url;
+            return `<a href="${url}" target="_blank" style="color: #3b82f6; text-decoration: underline; display: flex; align-items: center; gap: 4px;" data-category="link"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>${label}</a>`;
+        }
+
+        if (category === 'media') {
+            if (!mediaUrl.trim()) return value;
+            if (mediaType === 'video' || mediaUrl.match(/\.(mp4|webm|mov)$/i)) {
+                return `<video controls src="${mediaUrl}" width="${mediaDimensions?.width || 300}" height="${mediaDimensions?.height || 170}"></video>`;
+            }
+            return `![Media](${mediaUrl})<!-- width=${mediaDimensions?.width || 300} height=${mediaDimensions?.height || 170} -->`;
+        }
+
+        if (category === 'table') {
+            let md = '\n';
+            md += `| ${Array(tableCols).fill('Header').join(' | ')} |\n`;
+            md += `| ${Array(tableCols).fill('---').join(' | ')} |\n`;
+            for (let i = 0; i < tableRows; i++) {
+                md += `| ${Array(tableCols).fill('Cell').join(' | ')} |\n`;
+            }
+            return md;
+        }
+
+        if (category === 'code') {
+            if (!codeContent.trim()) return value;
+            const safeContent = codeContent.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const encodedContent = encodeURIComponent(codeContent);
+            return `<div class="code-node-container" style="background: #1e1e2e; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; overflow: hidden; min-width: 250px; max-width: 500px; text-align: left; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); position: relative;" data-category="code">
+  <div style="background: rgba(0,0,0,0.2); padding: 8px 12px; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+    <div style="width: 10px; height: 10px; border-radius: 50%; background: #ff5f56; box-shadow: inset 0 0 4px rgba(0,0,0,0.2);"></div>
+    <div style="width: 10px; height: 10px; border-radius: 50%; background: #ffbd2e; box-shadow: inset 0 0 4px rgba(0,0,0,0.2);"></div>
+    <div style="width: 10px; height: 10px; border-radius: 50%; background: #27c93f; box-shadow: inset 0 0 4px rgba(0,0,0,0.2);"></div>
+    <span style="color: rgba(255,255,255,0.4); font-size: 10px; margin-left: auto; font-family: monospace; letter-spacing: 0.5px;">CODE</span>
+    <button class="code-copy-btn" data-code="${encodedContent}" title="Copy Code" style="margin-left: 6px; background: transparent; border: none; padding: 2px; color: rgba(255,255,255,0.4); cursor: pointer; display: flex; align-items: center; justify-content: center; border-radius: 4px; transition: 0.2s;" onmouseover="this.style.color='#fff'; this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.color='rgba(255,255,255,0.4)'; this.style.background='transparent'">
+      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+    </button>
+  </div>
+  <div class="code-scroll-container" style="max-height: 270px; overflow-y: auto; overflow-x: auto;" onwheel="event.stopPropagation()">
+    <pre style="margin: 0; padding: 16px; font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace; font-size: 12px; color: #e2e8f0; white-space: pre-wrap; word-wrap: break-word; line-height: 1.5;">${safeContent}</pre>
+  </div>
+  <button class="code-fullscreen-btn" data-code="${encodedContent}" title="Full Screen" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.1); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.5); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.8)'" onmouseout="this.style.color='rgba(255,255,255,0.5)'; this.style.background='rgba(0,0,0,0.4)'">
+    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+  </button>
+</div>`;
+        }
+
+        if (isList) {
+            const lines = value.split('\n').filter(l => l.trim() !== '');
+            if (lines.length === 0) return value;
+            const openTag = listType === 'ordered' ? '<ol>' : '<ul>';
+            const closeTag = listType === 'ordered' ? '</ol>' : '</ul>';
+            const listItems = lines.map(l => `<li>${l.replace(/^(-\s|\d+\.\s)/, '')}</li>`).join('');
+            return `${openTag}${listItems}${closeTag}`;
+        }
+
+        return value;
+    };
+
+    const handleFormSubmit = async () => {
+        if (category === 'table') {
+            // Open TableEditorModal immediately without saving an empty markdown table
+            setIsTableModalOpen(true);
+            return;
+        }
+
+        if (category === 'media' && pendingFile && userData) {
+            setIsUploading(true);
+            setUploadProgress(0);
+            
+            const isVideo = mediaType === 'video';
+            const ext = isVideo ? 'mp4' : 'jpg';
+            const fileId = `${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${ext}`;
+            const storageRef = ref(storage, `media/${userData.uid}/${isVideo ? 'videos' : 'images'}/${fileId}`);
+            
+            const uploadTask = uploadBytesResumable(storageRef, pendingFile as Blob);
+
+            uploadTask.on('state_changed', 
+                (snapshot) => {
+                    const progress = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+                    setUploadProgress(progress);
+                }, 
+                (error) => {
+                    console.error("Upload error", error);
+                    alert("Error uploading file: " + error.message);
+                    setIsUploading(false);
+                }, 
+                async () => {
+                    const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
+                    
+                    // If replacing an existing media, delete the old one
+                    if (mediaUrl && mediaUrl.includes('firebasestorage.googleapis.com')) {
+                        try {
+                            const matches = mediaUrl.match(/\/o\/(.*?)\?alt=media/);
+                            if (matches && matches[1]) {
+                                const filePath = decodeURIComponent(matches[1]);
+                                const fileRef = ref(storage, filePath);
+                                await deleteObject(fileRef);
+                            }
+                        } catch (e) {
+                            console.error("Failed to delete replaced media", e);
+                        }
+                    }
+
+                    let finalVal = '';
+                    if (mediaType === 'video' || downloadURL.match(/\.(mp4|webm|mov)$/i)) {
+                        finalVal = `<video controls src="${downloadURL}" data-size="${pendingFile.size}" width="${mediaDimensions?.width || 300}" height="${mediaDimensions?.height || 170}"></video>`;
+                    } else {
+                        finalVal = `![Media](${downloadURL})<!-- size=${pendingFile.size} width=${mediaDimensions?.width || 300} height=${mediaDimensions?.height || 170} -->`;
+                    }
+                    
+                    setIsUploading(false);
+                    onSubmit(finalVal);
+                }
+            );
+            return;
+        }
+
+        // Wait, if they replaced the text input URL but didn't choose a pending file,
+        // we might also want to delete the old one, but we don't have the old URL easily here without storing it.
+        // For simplicity, we just handle file replacement deletion.
+
+        const finalVal = getFinalValue();
+        onSubmit(finalVal);
+    };
+
     const wrapText = (wrapper: string, endWrapper?: string) => {
         const textarea = textareaRef.current;
         if (!textarea) return;
-
         const start = textarea.selectionStart;
         const end = textarea.selectionEnd;
         const text = textarea.value;
         const selectedText = text.substring(start, end);
-
         if (!selectedText) return;
 
-        const before = text.substring(0, start);
-        const after = text.substring(end);
         const ew = endWrapper || wrapper;
-
-        const newValue = `${before}${wrapper}${selectedText}${ew}${after}`;
+        const newValue = text.substring(0, start) + wrapper + selectedText + ew + text.substring(end);
         setValue(newValue);
-
-        // Restore selection
         setTimeout(() => {
             textarea.focus();
             textarea.setSelectionRange(start + wrapper.length, end + wrapper.length);
         }, 0);
     };
 
-    // --- Sub-Components (Inline for simplicity given scope) ---
+    const toggleListMode = () => {
+        const textarea = textareaRef.current;
+        if (!textarea) return;
+        const lines = value.split('\n');
 
-    // 1. Link Mode
-    const LinkInput = () => {
-        const [url, setUrl] = useState('');
-        const [text, setText] = useState('');
-
-        return (
-            <div className="flex flex-col gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700">
-                <input
-                    type="text"
-                    placeholder="URL (https://...)"
-                    className="w-full p-1.5 text-sm rounded bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 focus:ring-2 focus:ring-blue-500 outline-none dark:text-white"
-                    value={url}
-                    onChange={e => setUrl(e.target.value)}
-                    autoFocus
-                />
-                <input
-                    type="text"
-                    placeholder="Link Text (Optional)"
-                    className="w-full p-1.5 text-sm rounded bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 focus:ring-2 focus:ring-blue-500 outline-none dark:text-white"
-                    value={text}
-                    onChange={e => setText(e.target.value)}
-                />
-                <div className="flex justify-end gap-2 mt-1">
-                    <button onClick={() => setMode('text')} className="px-3 py-1 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded">Cancel</button>
-                    <button
-                        onClick={() => {
-                            if (!url) return;
-                            const linkMd = `[${text || url}](${url})`;
-                            setValue(prev => prev ? `${prev} ${linkMd}` : linkMd);
-                            setMode('text');
-                        }}
-                        className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                    >
-                        Add Link
-                    </button>
-                </div>
-            </div>
-        );
+        if (!isList) {
+            setIsList(true);
+            setListType('bullet');
+            setValue(lines.map(l => l.startsWith('- ') ? l : `- ${l}`).join('\n'));
+        } else if (listType === 'bullet') {
+            setListType('ordered');
+            setValue(lines.map((l, i) => `${i + 1}. ${l.replace(/^-\s/, '')}`).join('\n'));
+        } else {
+            setIsList(false);
+            setValue(lines.map(l => l.replace(/^(\s*)([-*+]|\d+[\.\)])\s+/, '$1')).join('\n'));
+        }
     };
 
-    // 2. Table Mode
-    const TableInput = () => {
-        const [rows, setRows] = useState(2);
-        const [cols, setCols] = useState(2);
-
-        return (
-            <div className="flex flex-col gap-3 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700">
-                <div className="flex items-center gap-4">
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-zinc-500">Rows</label>
-                        <input
-                            type="number" min="1" max="10"
-                            value={rows} onChange={e => setRows(Number(e.target.value))}
-                            className="w-16 p-1 text-sm border rounded bg-white dark:bg-zinc-900 dark:text-white"
-                        />
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        <label className="text-xs font-medium text-zinc-500">Columns</label>
-                        <input
-                            type="number" min="1" max="10"
-                            value={cols} onChange={e => setCols(Number(e.target.value))}
-                            className="w-16 p-1 text-sm border rounded bg-white dark:bg-zinc-900 dark:text-white"
-                        />
-                    </div>
-                </div>
-
-                {/* Mini Preview Grid */}
-                <div className="grid gap-0.5 bg-zinc-300 dark:bg-zinc-600 p-0.5 rounded" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
-                    {Array.from({ length: rows * cols }).map((_, i) => (
-                        <div key={i} className="bg-white dark:bg-zinc-800 h-4 w-6 rounded-[1px]" />
-                    ))}
-                </div>
-
-                <div className="flex justify-end gap-2">
-                    <button onClick={() => setMode('text')} className="px-3 py-1 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded">Cancel</button>
-                    <button
-                        onClick={() => {
-                            // Generate Markdown Table
-                            let md = '\n';
-                            // Header
-                            md += `| ${Array(cols).fill('Header').join(' | ')} |\n`;
-                            // Separator
-                            md += `| ${Array(cols).fill('---').join(' | ')} |\n`;
-                            // Rows
-                            for (let i = 0; i < rows; i++) {
-                                md += `| ${Array(cols).fill('Cell').join(' | ')} |\n`;
-                            }
-                            setValue(prev => prev + md);
-                            setMode('text');
-                        }}
-                        className="px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                    >
-                        Insert Table
-                    </button>
-                </div>
-            </div>
-        );
-    };
-
-    // 3. Media Mode
-    const MediaInput = () => {
-        const [activeTab, setActiveTab] = useState<'upload' | 'link'>('upload');
-        const [mediaUrl, setMediaUrl] = useState('');
-        const fileInputRef = useRef<HTMLInputElement>(null);
-
-        const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-
-            // Size validation
-            // Image: 4MB, Video: 15MB
-            const isVideo = file.type.startsWith('video/');
-            const maxSize = isVideo ? 15 * 1024 * 1024 : 4 * 1024 * 1024;
-
-            if (file.size > maxSize) {
-                alert(`File too large. Max ${isVideo ? '15MB' : '4MB'}`);
-                return;
-            }
-
-            // Create Object URL
-            const objUrl = URL.createObjectURL(file);
-            insertMedia(objUrl, isVideo);
-        };
-
-        const insertMedia = (url: string, isVideo: boolean) => {
-            const md = isVideo
-                ? `\n<video controls src="${url}" width="300"></video>`
-                : `![](${url})`; // Standard MD image
-            setValue(prev => prev + md);
-            setMode('text');
-        };
-
-        return (
-            <div className="flex flex-col gap-3 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700">
-                <div className="flex gap-2 border-b border-zinc-200 dark:border-zinc-700 pb-2">
-                    <button
-                        onClick={() => setActiveTab('upload')}
-                        className={`text-xs px-2 py-1 rounded ${activeTab === 'upload' ? 'bg-zinc-200 dark:bg-zinc-700 font-medium' : 'text-zinc-500'}`}
-                    >
-                        Upload
-                    </button>
-                    <button
-                        onClick={() => setActiveTab('link')}
-                        className={`text-xs px-2 py-1 rounded ${activeTab === 'link' ? 'bg-zinc-200 dark:bg-zinc-700 font-medium' : 'text-zinc-500'}`}
-                    >
-                        Link
-                    </button>
-                </div>
-
-                {activeTab === 'upload' ? (
-                    <div
-                        className="border-2 border-dashed border-zinc-300 dark:border-zinc-600 rounded p-4 flex flex-col items-center justify-center cursor-pointer hover:bg-zinc-100 dark:hover:bg-zinc-700/50 transition-colors"
-                        onClick={() => fileInputRef.current?.click()}
-                    >
-                        <input
-                            ref={fileInputRef}
-                            type="file"
-                            className="hidden"
-                            accept="image/*,video/*"
-                            onChange={handleFileUpload}
-                        />
-                        <div className="text-zinc-400 mb-1"><Film size={20} /></div>
-                        <span className="text-xs text-zinc-500">Click to upload Image/Video</span>
-                        <span className="text-[10px] text-zinc-400 mt-1">Img &lt;4MB, Vid &lt;15MB</span>
-                    </div>
-                ) : (
-                    <div className="flex flex-col gap-2">
-                        <input
-                            type="text"
-                            placeholder="Media URL"
-                            className="w-full p-1.5 text-sm rounded bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 focus:ring-2 focus:ring-blue-500 outline-none dark:text-white"
-                            value={mediaUrl}
-                            onChange={e => setMediaUrl(e.target.value)}
-                        />
-                        <button
-                            onClick={() => {
-                                if (!mediaUrl) return;
-                                const isVideo = mediaUrl.match(/\.(mp4|webm|mov)$/i);
-                                insertMedia(mediaUrl, !!isVideo);
-                            }}
-                            className="self-end px-3 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
-                        >
-                            Add Media
-                        </button>
-                    </div>
-                )}
-
-                <button onClick={() => setMode('text')} onMouseDown={e => e.preventDefault()} className="text-xs text-zinc-500 hover:text-zinc-700 self-start mt-1">Cancel</button>
-            </div>
-        );
-    };
-
-    // 5. Code Mode (Rich Popup)
-    const CodeInput = () => {
-        const [code, setCode] = useState('');
-
-        return (
-            <div className="flex flex-col gap-2 p-3 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700 w-[300px]">
-                <div className="flex justify-between items-center mb-1">
-                    <span className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Inline Code</span>
-                    <Code size={14} className="text-zinc-400" />
-                </div>
-                <textarea
-                    className="w-full h-24 p-2 text-sm font-mono bg-zinc-900 text-green-400 rounded border border-zinc-700 outline-none resize-none placeholder-zinc-600"
-                    placeholder="const foo = 'bar';"
-                    value={code}
-                    onChange={e => setCode(e.target.value)}
-                    autoFocus
-                />
-                <div className="flex justify-end gap-2">
-                    <button onClick={() => setMode('text')} className="px-3 py-1 text-xs text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 rounded">Cancel</button>
-                    <button
-                        onClick={() => {
-                            if (!code.trim()) return;
-                            const newVal = `\`${code}\` `; // Inline code
-                            setValue(prev => prev ? prev + newVal : newVal);
-                            setMode('text');
-                        }}
-                        className="px-3 py-1 text-xs bg-orange-500 text-white rounded hover:bg-orange-600"
-                    >
-                        Insert Code
-                    </button>
-                </div>
-            </div>
-        );
-    };
-
-    // 4. List Mode (Simplified Popover)
-    const ListInput = () => {
-        return (
-            <div className="grid grid-cols-3 gap-2 p-2 bg-zinc-50 dark:bg-zinc-800 rounded-md border border-zinc-200 dark:border-zinc-700 w-[200px]">
-                {[
-                    { label: 'Bullet', char: '- ' },
-                    { label: 'Number', char: '1. ' },
-                    { label: 'Check', char: '- [ ] ' },
-                    { label: 'Star', char: '* ' },
-                ].map(item => (
-                    <button
-                        key={item.label}
-                        onClick={() => {
-                            setValue(prev => (prev ? prev + '\n' : '') + item.char);
-                            setMode('text');
-                            setTimeout(() => {
-                                textareaRef.current?.focus();
-                            }, 50);
-                        }}
-                        className="text-xs p-2 bg-white dark:bg-zinc-700 hover:bg-blue-50 dark:hover:bg-blue-900/30 border border-zinc-200 dark:border-zinc-600 rounded flex flex-col items-center gap-1"
-                    >
-                        <span className="font-mono">{item.char.trim()}</span>
-                        <span className="text-[10px] text-zinc-500">{item.label}</span>
-                    </button>
-                ))}
-                <button onClick={() => setMode('text')} onMouseDown={e => e.preventDefault()} className="col-span-3 text-xs text-center text-zinc-400 hover:text-zinc-600">Cancel</button>
-            </div>
-        );
-    };
-
-    // --- Auto-List & Smart Input Handlers ---
-
-    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Escape') {
             onCancel();
             return;
         }
 
-        if (e.key === 'Enter') {
-            if (e.ctrlKey) {
-                onSubmit(getFinalValue(value));
-                return;
-            }
-
-            // Auto-Continue Logic (Standard Markdown)
-            const textarea = textareaRef.current;
-            if (!textarea) return;
-
-            const start = textarea.selectionStart;
-            const text = textarea.value;
-
-            // Get current line context
-            const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-            const lineEnd = text.indexOf('\n', start);
-            const currentLine = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
-
-            // Matches: "- ", "* ", "+ ", "1. ", "1) " with any whitespace
-            const listRegex = /^(\s*)([-*+]|\d+[\.\)])\s+/;
-            const match = currentLine.match(listRegex);
-
-            if (match) {
-                // If the user hit Enter on a line that consists ONLY of the marker, they probably want to exit the list.
-                const marker = match[0];
-                const content = currentLine.substring(marker.length).trim();
-
-                if (!content) {
-                    e.preventDefault();
-                    // Remove the empty marker on current line
-                    const newValue = text.substring(0, lineStart) + text.substring(lineEnd === -1 ? text.length : lineEnd + 1);
-                    setValue(newValue);
-                    return;
-                }
-
-                e.preventDefault();
-
-                // Determine next marker
-                let nextMarker = marker;
-                // Auto-increment number
-                // Capture: indent, number, separator (dot or paren)
-                const numMatch = marker.match(/^(\s*)(\d+)([\.\)])(\s+)/);
-                if (numMatch) {
-                    const indent = numMatch[1];
-                    const num = parseInt(numMatch[2], 10);
-                    const sep = numMatch[3]; // . or )
-                    const trailingSpace = numMatch[4];
-                    nextMarker = `${indent}${num + 1}${sep}${trailingSpace}`;
-                }
-
-                // Insert "\n" + nextMarker
-                const newValue = text.substring(0, start) + '\n' + nextMarker + text.substring(start);
-                setValue(newValue);
-
-                setTimeout(() => {
-                    const newPos = start + 1 + nextMarker.length;
-                    textarea.setSelectionRange(newPos, newPos);
-                    textarea.scrollTop = textarea.scrollHeight;
-                }, 0);
-            }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            e.preventDefault();
+            handleFormSubmit();
+            return;
         }
-    };
-
-    const toggleCheckbox = () => {
-        const textarea = textareaRef.current;
-        if (!textarea) return;
-
-        const start = textarea.selectionStart;
-        const text = textarea.value;
-        const lineStart = text.lastIndexOf('\n', start - 1) + 1;
-        const lineEnd = text.indexOf('\n', start);
-        const actualLineEnd = lineEnd === -1 ? text.length : lineEnd;
-        const currentLine = text.substring(lineStart, actualLineEnd);
-
-        let newLine = currentLine;
-
-        if (currentLine.match(/^\s*- \[ \]\s/)) {
-            // Remove
-            newLine = currentLine.replace(/^\s*- \[ \]\s/, '');
-        } else if (currentLine.match(/^\s*- \[x\]\s/)) {
-            // Remove
-            newLine = currentLine.replace(/^\s*- \[x\]\s/, '');
-        } else {
-            // Add
-            // Respect existing indent?? For now just prepend.
-            newLine = `- [ ] ${currentLine}`;
-        }
-
-        const newValue = text.substring(0, lineStart) + newLine + text.substring(actualLineEnd);
-        setValue(newValue);
-
-        setTimeout(() => {
-            textarea.focus();
-            // Try to keep cursor relatively or at end
-            textarea.setSelectionRange(lineStart + newLine.length, lineStart + newLine.length);
-        }, 0);
     };
 
     return (
-        <div className="flex flex-col gap-1 w-[350px] bg-white dark:bg-zinc-900 rounded-xl shadow-2xl border border-zinc-200 dark:border-zinc-700 overflow-hidden animate-in fade-in zoom-in-95 duration-200 ring-1 ring-zinc-900/5">
-            {/* Top Toolbar: Rich Text */}
-            <div className="flex items-center gap-1 p-1 bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-700/50 overflow-x-auto no-scrollbar">
-                <ToolBtn icon={<Bold size={14} />} onClick={() => wrapText('**')} title="Bold" />
-                <ToolBtn icon={<Italic size={14} />} onClick={() => wrapText('*')} title="Italic" />
-                <ToolBtn icon={<Underline size={14} />} onClick={() => wrapText('<u>', '</u>')} title="Underline" />
-                <ToolBtn icon={<Strikethrough size={14} />} onClick={() => wrapText('~~')} title="Strikethrough" />
-                <div className="w-[1px] h-4 bg-zinc-200 dark:bg-zinc-700 mx-1" />
-                <ToolBtn icon={<Highlighter size={14} />} onClick={() => wrapText('==')} title="Highlight" />
-                <ToolBtn icon={<Code size={14} />} onClick={() => setMode('code')} active={mode === 'code'} title="Inline Code" />
-            </div>
+        <>
+            <div
+                onKeyDown={handleKeyDown}
+                className="flex flex-col w-[380px] sm:w-[430px] bg-slate-900/95 backdrop-blur-xl text-white rounded-2xl shadow-[0_25px_70px_rgba(0,0,0,0.6)] border border-slate-700/60 overflow-hidden ring-1 ring-white/10 animate-in fade-in zoom-in-95 duration-200"
+            >
+                {/* Header Badge */}
+                <div className={`flex items-center justify-between px-4 py-2.5 bg-gradient-to-r ${actionColor} text-white shadow-md`}>
+                    <div className="flex items-center gap-2">
+                        <Sparkles size={16} className="animate-pulse" />
+                        <span className="font-semibold text-xs tracking-wide uppercase">{actionTitle}</span>
+                    </div>
+                    <button
+                        onClick={onCancel}
+                        className="p-1 rounded-full hover:bg-white/20 transition-colors"
+                        title="Close (Esc)"
+                    >
+                        <X size={14} />
+                    </button>
+                </div>
 
-            {/* Main Content Area */}
-            <div className="p-1 relative min-h-[100px] flex flex-col">
-                {mode === 'text' ? (
-                    <div className="flex w-full h-full">
-                        {isTask ? (
-                            <div className="flex flex-col w-full h-full overflow-y-auto max-h-[300px]">
-                                {taskItems.map((item, index) => (
-                                    <div key={item.id} className="flex items-start gap-2 py-1 group">
-                                        <div className="pt-1 select-none cursor-pointer" onClick={() => {
-                                            const newItems = [...taskItems];
-                                            newItems[index].checked = !newItems[index].checked;
-                                            setTaskItems(newItems);
-                                        }}>
-                                            {item.checked ? (
-                                                <div className="w-4 h-4 bg-blue-500 rounded border border-blue-600 flex items-center justify-center text-white">
-                                                    <Check size={10} strokeWidth={4} />
-                                                </div>
-                                            ) : (
-                                                <div className="w-4 h-4 rounded border border-zinc-300 dark:border-zinc-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors" />
-                                            )}
-                                        </div>
+                {/* Visual Category Selector Bar */}
+                <div className="p-2 bg-slate-800/80 border-b border-slate-700/50">
+                    {isEditingExisting ? (
+                        <div className="flex items-center justify-between px-3 py-1.5 bg-slate-700/60 rounded-xl border border-slate-600/40 text-xs font-medium text-amber-300">
+                            <span className="flex items-center gap-1.5">
+                                <Edit2 size={13} className="text-amber-400" />
+                                Editing <span className="font-bold uppercase text-white">{category}</span> Node
+                            </span>
+                            <span className="text-[10px] bg-amber-500/20 text-amber-300 px-2 py-0.5 rounded-full border border-amber-500/30">
+                                Context-Locked
+                            </span>
+                        </div>
+                    ) : (
+                        <div className="grid grid-cols-6 gap-1">
+                            {[
+                                { id: 'text', label: 'Text', icon: Type, color: 'text-blue-400' },
+                                { id: 'task', label: 'Checklist', icon: CheckSquare, color: 'text-emerald-400' },
+                                { id: 'link', label: 'Link', icon: LinkIcon, color: 'text-cyan-400' },
+                                { id: 'media', label: 'Media', icon: ImageIcon, color: 'text-purple-400' },
+                                { id: 'table', label: 'Table', icon: TableIcon, color: 'text-amber-400' },
+                                { id: 'code', label: 'Code', icon: Code, color: 'text-orange-400' },
+                            ].map(cat => {
+                                const Icon = cat.icon;
+                                const isActive = category === cat.id;
+                                return (
+                                    <button
+                                        key={cat.id}
+                                        type="button"
+                                        onClick={() => setCategory(cat.id as NodeCategory)}
+                                        className={`flex flex-col items-center justify-center py-2 px-1 rounded-xl text-[10px] font-medium transition-all ${isActive
+                                                ? 'bg-slate-700/90 text-white shadow-inner border border-slate-500/50 scale-105'
+                                                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/40'
+                                            }`}
+                                    >
+                                        <Icon size={16} className={`mb-1 ${isActive ? cat.color : 'text-slate-400'}`} />
+                                        <span>{cat.label}</span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+
+                {/* Dynamic Content Area */}
+                <div className="p-3 min-h-[140px] max-h-[340px] overflow-y-auto">
+                    {/* 1. TEXT MODE */}
+                    {category === 'text' && (
+                        <div className="flex flex-col gap-2">
+                            <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-lg border border-slate-700/40 overflow-x-auto no-scrollbar">
+                                <button onClick={() => wrapText('**')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Bold"><Bold size={13} /></button>
+                                <button onClick={() => wrapText('*')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Italic"><Italic size={13} /></button>
+                                <button onClick={() => wrapText('<u>', '</u>')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Underline"><Underline size={13} /></button>
+                                <button onClick={() => wrapText('~~')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Strikethrough"><Strikethrough size={13} /></button>
+                                <button onClick={() => wrapText('==')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Highlight"><Highlighter size={13} /></button>
+                                <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+                                <button onClick={toggleListMode} className={`p-1.5 rounded transition-colors ${isList ? 'bg-blue-600 text-white' : 'hover:bg-slate-700/60 text-slate-300'}`} title="Toggle List"><List size={13} /></button>
+                            </div>
+
+                            <textarea
+                                ref={textareaRef}
+                                autoFocus
+                                rows={4}
+                                className="w-full p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none font-sans leading-relaxed"
+                                placeholder="Type node content..."
+                                value={value}
+                                onChange={e => setValue(e.target.value)}
+                            />
+                        </div>
+                    )}
+
+                    {/* 2. CHECKLIST MODE */}
+                    {category === 'task' && (
+                        <div className="flex flex-col gap-2">
+                            <div className="flex justify-between items-center px-1 text-xs text-emerald-400 font-medium">
+                                <span>Checklist Items ({taskItems.filter(t => t.checked).length}/{taskItems.length})</span>
+                                <button
+                                    onClick={() => {
+                                        const newItem = { id: `item-${Date.now()}`, text: '', checked: false };
+                                        setTaskItems([...taskItems, newItem]);
+                                    }}
+                                    className="flex items-center gap-1 text-[11px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 px-2 py-0.5 rounded-full transition-colors"
+                                >
+                                    <Plus size={12} /> Add Item
+                                </button>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5 max-h-[220px] overflow-y-auto pr-1">
+                                {taskItems.map((item, idx) => (
+                                    <div key={item.id} className="flex items-center gap-2 bg-slate-800/60 p-2 rounded-xl border border-slate-700/50 group">
+                                        <input
+                                            type="checkbox"
+                                            checked={item.checked}
+                                            onChange={() => {
+                                                const updated = [...taskItems];
+                                                updated[idx].checked = !updated[idx].checked;
+                                                setTaskItems(updated);
+                                            }}
+                                            className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                                        />
                                         <input
                                             ref={el => {
                                                 if (el) itemRefs.current.set(item.id, el);
                                                 else itemRefs.current.delete(item.id);
                                             }}
-                                            className="flex-1 bg-transparent outline-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed"
+                                            type="text"
+                                            placeholder={`Task ${idx + 1}...`}
+                                            className={`flex-1 bg-transparent border-none text-sm text-slate-100 placeholder-slate-500 focus:outline-none ${item.checked ? 'line-through text-slate-500' : ''}`}
                                             value={item.text}
-                                            placeholder="Task item..."
-                                            onChange={(e) => {
-                                                const newItems = [...taskItems];
-                                                newItems[index].text = e.target.value;
-                                                setTaskItems(newItems);
+                                            onChange={e => {
+                                                const updated = [...taskItems];
+                                                updated[idx].text = e.target.value;
+                                                setTaskItems(updated);
                                             }}
-                                            onKeyDown={(e) => {
+                                            onKeyDown={e => {
                                                 if (e.key === 'Enter') {
                                                     e.preventDefault();
-                                                    // Add new item below
-                                                    const newItemId = `item-${Date.now()}`;
-                                                    const newItems = [...taskItems];
-                                                    newItems.splice(index + 1, 0, {
-                                                        id: newItemId,
-                                                        checked: false,
-                                                        text: ''
-                                                    });
-                                                    setTaskItems(newItems);
-                                                    setTimeout(() => itemRefs.current.get(newItemId)?.focus(), 0);
-                                                }
-                                                if (e.key === 'Backspace' && item.text === '') {
-                                                    // Delete if empty and not the only one?
-                                                    // If single empty item, maybe just do nothing or close?
-                                                    // Let's delete and focus previous
-                                                    if (taskItems.length > 1) {
-                                                        e.preventDefault();
-                                                        const newItems = taskItems.filter(i => i.id !== item.id);
-                                                        setTaskItems(newItems);
-                                                        const prevId = taskItems[index - 1]?.id;
-                                                        if (prevId) setTimeout(() => {
-                                                            const el = itemRefs.current.get(prevId);
-                                                            if (el) {
-                                                                el.focus();
-                                                                // Set cursor to end??
-                                                            }
-                                                        }, 0);
-                                                    }
-                                                }
-                                                if (e.key === 'ArrowUp') {
-                                                    e.preventDefault();
-                                                    const prevId = taskItems[index - 1]?.id;
-                                                    if (prevId) itemRefs.current.get(prevId)?.focus();
-                                                }
-                                                if (e.key === 'ArrowDown') {
-                                                    e.preventDefault();
-                                                    const nextId = taskItems[index + 1]?.id;
-                                                    if (nextId) itemRefs.current.get(nextId)?.focus();
+                                                    const newItem = { id: `item-${Date.now()}`, text: '', checked: false };
+                                                    const updated = [...taskItems];
+                                                    updated.splice(idx + 1, 0, newItem);
+                                                    setTaskItems(updated);
+                                                    setTimeout(() => itemRefs.current.get(newItem.id)?.focus(), 0);
                                                 }
                                             }}
                                         />
+                                        {taskItems.length > 1 && (
+                                            <button
+                                                onClick={() => setTaskItems(taskItems.filter(t => t.id !== item.id))}
+                                                className="p-1 opacity-0 group-hover:opacity-100 text-slate-500 hover:text-red-400 transition-opacity"
+                                            >
+                                                <Trash2 size={13} />
+                                            </button>
+                                        )}
                                     </div>
                                 ))}
-                                {taskItems.length === 0 && (
-                                    <div className="text-zinc-400 text-sm p-2 italic cursor-pointer" onClick={() => {
-                                        const newItem = { id: `item-${Date.now()}`, checked: false, text: '' };
-                                        setTaskItems([newItem]);
-                                        setTimeout(() => itemRefs.current.get(newItem.id)?.focus(), 0);
-                                    }}>
-                                        Click to add item...
-                                    </div>
-                                )}
                             </div>
+                        </div>
+                    )}
+
+                    {/* 3. LINK MODE */}
+                    {category === 'link' && (
+                        <div className="flex flex-col gap-3 p-1">
+                            <div>
+                                <label className="block text-[11px] font-medium text-cyan-400 mb-1">Web Address (URL)</label>
+                                <input
+                                    type="text"
+                                    autoFocus
+                                    placeholder="https://example.com"
+                                    className="w-full p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                                    value={linkUrl}
+                                    onChange={e => setLinkUrl(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-[11px] font-medium text-slate-400 mb-1">Display Label (Optional)</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g. Visit Documentation"
+                                    className="w-full p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                                    value={linkText}
+                                    onChange={e => setLinkText(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 4. MEDIA MODE */}
+                    {category === 'media' && (
+                        <div className="flex flex-col gap-3 p-1">
+                            <div className="flex items-center gap-2 bg-slate-800/60 p-1.5 rounded-xl border border-slate-700/50">
+                                <button
+                                    onClick={() => setMediaType('image')}
+                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${mediaType === 'image' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+                                >
+                                    <ImageIcon size={13} />
+                                    <span>Image</span>
+                                    <span className="flex items-center gap-0.5 text-[9px] bg-yellow-500/20 text-yellow-300 px-1.5 py-0.5 rounded-full border border-yellow-500/30">
+                                        👑 PRO
+                                    </span>
+                                </button>
+
+                                <button
+                                    onClick={() => setMediaType('video')}
+                                    className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center justify-center gap-1.5 ${mediaType === 'video' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-400 hover:text-slate-200'}`}
+                                >
+                                    <Video size={13} />
+                                    <span>Video</span>
+                                    <span className="flex items-center gap-0.5 text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded-full border border-purple-500/30">
+                                        👑 ULTRA
+                                    </span>
+                                </button>
+                            </div>
+
+                            <div className="flex flex-col gap-2">
+                                <div
+                                    onClick={() => fileInputRef.current?.click()}
+                                    className={`border-2 border-dashed border-slate-700/80 hover:border-purple-500/60 rounded-xl p-3 flex flex-col items-center justify-center cursor-pointer bg-slate-800/40 hover:bg-slate-800/80 transition-colors ${isCompressing || isUploading ? 'opacity-50 pointer-events-none' : ''}`}
+                                >
+                                    <input
+                                        ref={fileInputRef}
+                                        type="file"
+                                        className="hidden"
+                                        accept={mediaType === 'image' ? 'image/*' : 'video/*'}
+                                        onChange={handleFileUpload}
+                                    />
+                                    <Film size={20} className="text-purple-400 mb-1" />
+                                    <span className="text-xs font-medium text-slate-200">
+                                        {isCompressing ? "Processing file..." : mediaUrl ? `Click to Replace ${mediaType === 'image' ? 'Image (<4MB)' : 'Video (<25MB)'}` : `Click to Choose ${mediaType === 'image' ? 'Image (<4MB)' : 'Video (<25MB)'}`}
+                                    </span>
+                                    <span className="text-[10px] text-slate-400 mt-1 flex items-center gap-1">
+                                        {mediaType === 'image' ? (
+                                            <span className="text-yellow-400 flex items-center gap-1">⭐ Requires Pro Plan (Auto Compressed)</span>
+                                        ) : (
+                                            <span className="text-purple-400 flex items-center gap-1">⭐ Requires Ultra Plan (Max 25MB)</span>
+                                        )}
+                                    </span>
+                                </div>
+
+                                <div className="relative">
+                                    <input
+                                        type="text"
+                                        placeholder="Or paste Direct Media URL..."
+                                        className="w-full p-2 bg-slate-800/60 border border-slate-700/60 rounded-xl text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-purple-500/50"
+                                        value={mediaUrl}
+                                        onChange={e => setMediaUrl(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+
+                            {mediaUrl.trim() && (
+                                <div className="p-2 bg-slate-800/40 rounded-xl border border-slate-700/40 flex flex-col items-center justify-center">
+                                    <span className="text-[10px] text-slate-400 mb-1">Live Preview</span>
+                                    {mediaType === 'image' ? (
+                                        <img src={mediaUrl} alt="Preview" className="max-h-24 rounded border border-slate-700 object-cover" onError={e => (e.currentTarget.style.display = 'none')} />
+                                    ) : (
+                                        <video src={mediaUrl} className="max-h-24 rounded border border-slate-700" controls />
+                                    )}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {/* 5. TABLE CREATION MODE WITH "SAVE & EDIT TABLE" BUTTON */}
+                    {category === 'table' && (
+                        <div className="flex flex-col gap-3 p-1">
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="flex flex-col gap-1 bg-slate-800/50 p-2 rounded-xl border border-slate-700/50">
+                                    <div className="flex justify-between items-center">
+                                        <label className="text-[11px] font-medium text-amber-400">Rows</label>
+                                        <input
+                                            type="number" min="1" max="15"
+                                            value={tableRows}
+                                            onChange={e => setTableRows(Math.max(1, Math.min(15, parseInt(e.target.value) || 1)))}
+                                            className="w-12 px-1.5 py-0.5 text-xs text-center bg-slate-900 border border-slate-700 rounded text-amber-300 font-bold outline-none"
+                                        />
+                                    </div>
+                                    <input
+                                        type="range" min="1" max="5"
+                                        value={tableRows <= 5 ? tableRows : 5}
+                                        onChange={e => setTableRows(Number(e.target.value))}
+                                        className="w-full accent-amber-500 cursor-pointer"
+                                    />
+                                </div>
+
+                                <div className="flex flex-col gap-1 bg-slate-800/50 p-2 rounded-xl border border-slate-700/50">
+                                    <div className="flex justify-between items-center">
+                                        <label className="text-[11px] font-medium text-amber-400">Columns</label>
+                                        <input
+                                            type="number" min="1" max="15"
+                                            value={tableCols}
+                                            onChange={e => setTableCols(Math.max(1, Math.min(15, parseInt(e.target.value) || 1)))}
+                                            className="w-12 px-1.5 py-0.5 text-xs text-center bg-slate-900 border border-slate-700 rounded text-amber-300 font-bold outline-none"
+                                        />
+                                    </div>
+                                    <input
+                                        type="range" min="1" max="5"
+                                        value={tableCols <= 5 ? tableCols : 5}
+                                        onChange={e => setTableCols(Number(e.target.value))}
+                                        className="w-full accent-amber-500 cursor-pointer"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* Mini Grid Preview */}
+                            <div className="p-2 bg-slate-800/60 rounded-xl border border-slate-700/50 flex flex-col items-center justify-center min-h-[70px]">
+                                <span className="text-[10px] text-slate-400 mb-1.5 font-medium flex items-center gap-1">
+                                    <Grid size={11} className="text-amber-400" /> Live Grid Preview ({tableRows} × {tableCols})
+                                </span>
+                                <div
+                                    className="grid gap-1 bg-slate-700/50 p-1.5 rounded-lg w-full max-w-[210px] overflow-hidden"
+                                    style={{ gridTemplateColumns: `repeat(${tableCols}, minmax(0, 1fr))` }}
+                                >
+                                    {Array.from({ length: Math.min(tableRows, 15) * Math.min(tableCols, 15) }).map((_, i) => (
+                                        <div
+                                            key={i}
+                                            className={`h-3.5 rounded-[2px] transition-all ${i % Math.min(tableCols, 15) < tableCols
+                                                    ? 'bg-amber-500/50 border border-amber-400/60 shadow-sm'
+                                                    : 'bg-slate-600/50 border border-slate-500/30'
+                                                }`}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Table Action Prompt */}
+                            <div className="p-3 bg-slate-800/60 rounded-xl border border-slate-700/50 flex flex-col items-center justify-center text-center">
+                                <span className="text-xs text-slate-300 font-medium mb-1">
+                                    Click <span className="text-amber-400 font-bold">"Open Advanced Editor"</span> to enter cell data
+                                </span>
+                                <span className="text-[10px] text-slate-400">
+                                    Creates empty table and launches visual spreadsheet editor
+                                </span>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 6. CODE MODE */}
+                    {category === 'code' && (
+                        <div className="flex flex-col gap-2 p-1">
+                            <label className="block text-[11px] font-medium text-slate-400">Code Snippet Editor</label>
+                            <div className="rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-[#1e1e2e]">
+                                <div className="bg-black/20 px-3 py-2 flex items-center gap-1.5 border-b border-white/5">
+                                    <div className="w-2.5 h-2.5 rounded-full bg-[#ff5f56] shadow-inner"></div>
+                                    <div className="w-2.5 h-2.5 rounded-full bg-[#ffbd2e] shadow-inner"></div>
+                                    <div className="w-2.5 h-2.5 rounded-full bg-[#27c93f] shadow-inner"></div>
+                                    <span className="text-white/40 text-[10px] ml-auto font-mono tracking-widest">CODE</span>
+                                </div>
+                                <textarea
+                                    autoFocus
+                                    rows={6}
+                                    placeholder="// Write your code snippet here..."
+                                    className="code-textarea w-full p-3 bg-transparent font-mono text-[11px] md:text-xs text-[#e2e8f0] placeholder-slate-600 focus:outline-none resize-none leading-relaxed"
+                                    value={codeContent}
+                                    onChange={e => setCodeContent(e.target.value)}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* Footer Toolbar */}
+                <div className="flex items-center justify-between p-3 bg-slate-800/90 border-t border-slate-700/60">
+                    <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                        <span className="flex items-center gap-1 bg-slate-700/60 px-2 py-0.5 rounded text-slate-300 border border-slate-600/40">
+                            <kbd className="font-mono font-bold">Esc</kbd> Cancel
+                        </span>
+                        <span className="flex items-center gap-1 bg-slate-700/60 px-2 py-0.5 rounded text-slate-300 border border-slate-600/40">
+                            <kbd className="font-mono font-bold">Ctrl+Enter</kbd> Save
+                        </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={onCancel}
+                            className="px-3 py-1.5 text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-700/60 rounded-xl transition-colors"
+                        >
+                            Cancel
+                        </button>
+
+                        {category === 'table' ? (
+                            <button
+                                type="button"
+                                onClick={handleFormSubmit}
+                                className="flex items-center gap-1.5 px-4 py-1.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white text-xs font-bold rounded-xl shadow-lg shadow-amber-500/25 transition-all active:scale-95"
+                            >
+                                <Sparkles size={14} />
+                                Open Advanced Editor
+                            </button>
                         ) : (
-                            <textarea
-                                ref={textareaRef}
-                                className="w-full h-full min-h-[100px] p-2 bg-transparent outline-none resize-none text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 font-sans leading-relaxed flex-1"
-                                placeholder={isList ? "List item..." : "Type something..."}
-                                value={value}
-                                onChange={e => setValue(e.target.value)}
-                                onKeyDown={handleKeyDown}
-                                onBlur={() => { /* Wait for explicit Done */ }}
-                                autoFocus
-                            />
+                            <button
+                                type="button"
+                                onClick={handleFormSubmit}
+                                disabled={isCompressing || isUploading}
+                                className={`flex items-center gap-1.5 px-4 py-1.5 text-white text-xs font-semibold rounded-xl shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed
+                                    ${category === 'media' && pendingFile ? 'bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 shadow-purple-500/25' : 'bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 shadow-blue-500/25'}`}
+                            >
+                                <Check size={14} />
+                                {isUploading ? `Uploading... ${uploadProgress}%` : (category === 'media' && pendingFile ? 'Upload & Save' : 'Save Node')}
+                            </button>
                         )}
                     </div>
-                ) : (
-                    <div className="p-2">
-                        {mode === 'link' && <LinkInput />}
-                        {mode === 'table' && <TableInput />}
-                        {mode === 'media' && <MediaInput />}
-                        {mode === 'list' && <ListInput />}
-                        {mode === 'code' && <CodeInput />}
-                    </div>
-                )}
-            </div>
-
-            {/* Footer Toolbar: Data Types & Actions */}
-            <div className="flex items-center justify-between p-1.5 bg-zinc-50 dark:bg-zinc-800 border-t border-zinc-200 dark:border-zinc-700">
-                <div className="flex items-center gap-1">
-                    <ToolBtn icon={<LinkIcon size={14} />} onClick={() => setMode('link')} active={mode === 'link'} title="Link" />
-                    <ToolBtn
-                        icon={<CheckSquare size={14} />}
-                        onClick={toggleTask}
-                        active={isTask}
-                        title="Checkbox Mode"
-                    />
-                    <ToolBtn
-                        icon={<List size={14} />}
-                        onClick={toggleList}
-                        active={isList}
-                        title={isList ? `List Mode (${listType === 'bullet' ? 'Bullet' : 'Number'})` : "List Mode"}
-                    />
-
-                    <ToolBtn icon={<TableIcon size={14} />} onClick={() => setMode('table')} active={mode === 'table'} title="Table" />
-                    <div className="w-[1px] h-4 bg-zinc-200 dark:bg-zinc-700 mx-1" />
-                    <ToolBtn icon={<ImageIcon size={14} />} onClick={() => setMode('media')} active={mode === 'media'} title="Media" />
-                </div>
-
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={onCancel}
-                        onMouseDown={e => e.preventDefault()}
-                        className="p-1.5 text-zinc-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md transition-colors"
-                    >
-                        <X size={16} />
-                    </button>
-                    <button
-                        onClick={() => handleSubmit(value)}
-                        onMouseDown={e => e.preventDefault()}
-                        className="flex items-center gap-1.5 px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-xs font-medium rounded-md shadow-sm transition-all"
-                    >
-                        <Check size={14} />
-                        Done
-                    </button>
                 </div>
             </div>
-        </div>
-    );
-}
 
-function ToolBtn({ icon, onClick, active, title }: { icon: React.ReactNode, onClick: () => void, active?: boolean, title?: string }) {
-    return (
-        <button
-            onClick={onClick}
-            onMouseDown={(e) => e.preventDefault()} // Prevent focus loss from textarea
-            title={title}
-            className={`p-1.5 rounded-md transition-all ${active
-                ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
-                : 'text-zinc-500 hover:bg-zinc-200 dark:hover:bg-zinc-700 dark:text-zinc-400'
-                }`}
-        >
-            {icon}
-        </button>
+            {/* INTERACTIVE SPREADSHEET TABLE EDITOR MODAL */}
+            <TableEditorModal
+                isOpen={isTableModalOpen}
+                onClose={() => setIsTableModalOpen(false)}
+                initialRows={tableRows}
+                initialCols={tableCols}
+                initialData={decodedInitialValue}
+                onSubmit={(tableHtml) => {
+                    onSubmit(tableHtml);
+                    setIsTableModalOpen(false);
+                }}
+            />
+
+            <PricingModal 
+                isOpen={showPricingModal} 
+                onClose={() => setShowPricingModal(false)} 
+                currentPlan={userPlan as 'free' | 'pro' | 'ultra'} 
+            />
+        </>
     );
 }

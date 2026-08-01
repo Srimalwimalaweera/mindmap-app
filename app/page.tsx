@@ -2,8 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { auth } from '@/lib/firebase';
-import { onAuthStateChanged, User, signOut } from 'firebase/auth';
+import { User } from 'firebase/auth';
 import type { MindMapData } from './services/mindmapService';
 import {
   getUserMindMaps,
@@ -14,39 +13,28 @@ import {
   permanentDeleteMindMap,
   emptyTrash
 } from './services/mindmapService';
-import { createBook, getBooks, updateBook, softDeleteBook, restoreBook, permanentDeleteBook, emptyBooksTrash, BookData } from './services/bookService';
 import Image from 'next/image';
+import { db, storage } from '@/lib/firebase';
+import { collection, query, where, getDocs, deleteDoc, doc } from 'firebase/firestore';
+import { ref, deleteObject } from 'firebase/storage';
 
 import LandingPage from './components/LandingPage';
 import Header from './components/Header';
 import LoadingScreen from './components/LoadingScreen';
 
 import { useAuth } from '@/app/context/AuthProvider';
-// ... (keep other imports)
 
 export default function Dashboard() {
-  const { user, userData, settings, loading: authLoading, logout } = useAuth(); // Use global auth
+  const { user, userData, settings, loading: authLoading, logout } = useAuth();
 
-  // Custom type to track source collection (fix for ghost items)
-  type ProjectItem = (MindMapData | BookData) & { source: 'markmaps' | 'books' };
-
-  const [maps, setMaps] = useState<ProjectItem[]>([]);
-  // const [loading, setLoading] = useState(true); // Removed local loading
-  const loading = authLoading; // Alias for compatibility with existing code if needed, or just use authLoading directly. 
-  // Actually, let's keep a local loading for maps? 
-  // The original code set loading=false after auth check AND map load. 
-  // Let's create a combined loading 
+  const [maps, setMaps] = useState<MindMapData[]>([]);
+  const loading = authLoading;
   const [mapsLoading, setMapsLoading] = useState(true);
 
   // Creation State
   const [creating, setCreating] = useState(false);
-  const [isNewProjectModalOpen, setIsNewProjectModalOpen] = useState(false);
-  const [isConstructionModalOpen, setIsConstructionModalOpen] = useState(false);
   const [isNameModalOpen, setIsNameModalOpen] = useState(false);
-  const [selectedType, setSelectedType] = useState<'map' | 'book'>('map');
   const [newMapTitle, setNewMapTitle] = useState('');
-  const [bookOrientation, setBookOrientation] = useState<'portrait' | 'landscape'>('portrait');
-  const [bookSubject, setBookSubject] = useState('');
 
   // Trash State
   const [isTrashOpen, setIsTrashOpen] = useState(false);
@@ -78,21 +66,15 @@ export default function Dashboard() {
   const loadMaps = async (currentUser: User) => {
     try {
       const userMaps = await getUserMindMaps(currentUser.uid);
-      const userBooks = await getBooks(currentUser.uid);
-      // Tag them with source
-      const markedMaps = userMaps.map(m => ({ ...m, source: 'markmaps' } as ProjectItem));
-      const markedBooks = userBooks.map(b => ({ ...b, source: 'books' } as ProjectItem));
-
-      const allProjects = [...markedMaps, ...markedBooks];
 
       // Client-side auto-delete check (older than 30 days)
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const mapsKeep: ProjectItem[] = [];
+      const mapsKeep: MindMapData[] = [];
       const mapsToDelete: string[] = [];
 
-      allProjects.forEach(map => {
+      userMaps.forEach(map => {
         if (map.isTrashed && map.trashedAt && new Date(map.trashedAt) < thirtyDaysAgo) {
           mapsToDelete.push(map.id);
         } else {
@@ -100,12 +82,38 @@ export default function Dashboard() {
         }
       });
 
-      // If we found items to delete, do it quietly in background
       if (mapsToDelete.length > 0) {
         Promise.all(mapsToDelete.map(id => permanentDeleteMindMap(id)));
       }
 
       setMaps(mapsKeep);
+
+      // Media Garbage Collection (older than 1 hour)
+      const oneHourAgo = new Date();
+      oneHourAgo.setHours(oneHourAgo.getHours() - 1);
+      
+      try {
+        const deletedMediaRef = collection(db, 'deleted_media');
+        const q = query(deletedMediaRef, where('deletedAt', '<', oneHourAgo));
+        const querySnapshot = await getDocs(q);
+        
+        const deletePromises = querySnapshot.docs.map(async (docSnap) => {
+          const data = docSnap.data();
+          if (data.url) {
+            try {
+               const fileRef = ref(storage, data.url);
+               await deleteObject(fileRef);
+            } catch (e) {
+               console.error("Failed to delete storage object", e);
+            }
+          }
+          await deleteDoc(doc(db, 'deleted_media', docSnap.id));
+        });
+        await Promise.all(deletePromises);
+      } catch (e) {
+        console.error("Media GC Error", e);
+      }
+
     } catch (e) {
       console.error("Error loading maps", e);
     } finally {
@@ -118,45 +126,35 @@ export default function Dashboard() {
       if (user) {
         loadMaps(user);
       } else {
-        setMapsLoading(false); // No user, stop loading (will redirect in render)
+        setMapsLoading(false);
       }
     }
   }, [user, authLoading]);
-
-  // Derived State ...
 
   // Derived State
   const { activeMaps, trashedMaps } = useMemo(() => {
     const active = maps.filter(m => !m.isTrashed);
     const trashed = maps.filter(m => m.isTrashed);
 
-    // Sort active: Pinned first, then UpdatedAt descending
     active.sort((a, b) => {
       if (a.isPinned && !b.isPinned) return -1;
       if (!a.isPinned && b.isPinned) return 1;
       return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
     });
 
-    // Filter by search
     const searchLower = searchTerm.toLowerCase();
     const filteredActive = active.filter(m => m.title.toLowerCase().includes(searchLower));
 
     return { activeMaps: filteredActive, trashedMaps: trashed };
   }, [maps, searchTerm]);
 
-
-  // const { user, userData, settings, loading: authLoading } = useAuth(); // Moved to top
-  // ...
   const handleCreate = async () => {
     if (!newMapTitle.trim() || !user) return;
 
-    // Limit Check
     if (userData && settings) {
-      // Base limit from plan settings (or default 10 if missing)
       const baseLimit = settings.projectLimits[userData.plan] ?? 10;
       const totalLimit = baseLimit + (userData.extraSlots || 0);
 
-      // Check active maps count
       if (activeMaps.length >= totalLimit) {
         alert(`Project limit reached (${totalLimit}). Upgrade to Pro/Ultra or buy slots.`);
         return;
@@ -165,19 +163,10 @@ export default function Dashboard() {
 
     setCreating(true);
     try {
-      if (selectedType === 'map') {
-        const newMapId = await createMindMap(user.uid, newMapTitle, 'map');
-        router.push(`/map/${newMapId}`);
-      } else {
-        const newBookId = await createBook(user.uid, newMapTitle, bookOrientation, bookSubject);
-        router.push(`/book/${newBookId}`);
-      }
-
-      // await loadMaps(user); // No need to reload if redirecting
+      const newMapId = await createMindMap(user.uid, newMapTitle);
+      router.push(`/map/${newMapId}`);
       setIsNameModalOpen(false);
       setNewMapTitle('');
-      setBookSubject('');
-      setBookOrientation('portrait');
     } catch (error) {
       console.error("Failed to create project", error);
       alert("Failed to create project.");
@@ -186,15 +175,13 @@ export default function Dashboard() {
     }
   };
 
-  const handlePin = async (e: React.MouseEvent, map: ProjectItem) => {
+  const handlePin = async (e: React.MouseEvent, map: MindMapData) => {
     e.stopPropagation();
     if (!user) return;
     const newStatus = !map.isPinned;
 
     if (newStatus && userData && settings) {
-      // Limit Check for Pinning
       const baseLimit = settings.pinLimits[userData.plan] ?? 5;
-      // Ultra is 0 (unlimited)
       if (baseLimit > 0) {
         const totalLimit = baseLimit + (userData.extraPins || 0);
         const currentPinned = activeMaps.filter(m => m.isPinned).length;
@@ -205,15 +192,8 @@ export default function Dashboard() {
       }
     }
 
-    // Optimistic update
     setMaps(maps.map(m => m.id === map.id ? { ...m, isPinned: newStatus } : m));
-
-    // Use source if available, otherwise fallback to type
-    if (map.source === 'books' || (!map.source && map.type === 'book')) {
-      await updateBook(map.id, { isPinned: newStatus });
-    } else {
-      await togglePinMindMap(map.id, newStatus);
-    }
+    await togglePinMindMap(map.id, newStatus);
   };
 
   const requestConfirmation = (title: string, message: string, actionLabel: string, action: () => Promise<void>, isDangerous = false) => {
@@ -230,7 +210,7 @@ export default function Dashboard() {
     }
   };
 
-  const handleSoftDelete = async (e: React.MouseEvent, map: ProjectItem) => {
+  const handleSoftDelete = async (e: React.MouseEvent, map: MindMapData) => {
     e.stopPropagation();
     if (!user) return;
 
@@ -240,29 +220,19 @@ export default function Dashboard() {
       "Move to Trash",
       async () => {
         setMaps(prev => prev.map(m => m.id === map.id ? { ...m, isTrashed: true, trashedAt: new Date().toISOString() } : m));
-
-        if (map.source === 'books' || (!map.source && map.type === 'book')) {
-          await softDeleteBook(map.id);
-        } else {
-          await softDeleteMindMap(map.id);
-        }
+        await softDeleteMindMap(map.id);
       },
       true
     );
   };
 
-  const handleRestore = async (map: ProjectItem) => {
+  const handleRestore = async (map: MindMapData) => {
     if (!user) return;
     setMaps(maps.map(m => m.id === map.id ? { ...m, isTrashed: false, trashedAt: undefined } : m));
-
-    if (map.source === 'books' || (!map.source && map.type === 'book')) {
-      await restoreBook(map.id);
-    } else {
-      await restoreMindMap(map.id);
-    }
+    await restoreMindMap(map.id);
   };
 
-  const handlePermanentDelete = async (map: ProjectItem) => {
+  const handlePermanentDelete = async (map: MindMapData) => {
     if (!user) return;
     requestConfirmation(
       "Delete Permanently?",
@@ -270,12 +240,7 @@ export default function Dashboard() {
       "Delete Permanently",
       async () => {
         setMaps(prev => prev.filter(m => m.id !== map.id));
-
-        if (map.source === 'books' || (!map.source && map.type === 'book')) {
-          await permanentDeleteBook(user.uid, map.id);
-        } else {
-          await permanentDeleteMindMap(map.id);
-        }
+        await permanentDeleteMindMap(map.id);
       },
       true
     );
@@ -289,24 +254,14 @@ export default function Dashboard() {
       "Empty Trash",
       async () => {
         setMaps(prev => prev.filter(m => !m.isTrashed));
-        await Promise.all([
-          emptyTrash(user.uid),
-          emptyBooksTrash(user.uid)
-        ]);
+        await emptyTrash(user.uid);
       },
       true
     );
   };
 
-  // const { logout } = useAuth(); // Moved to top
-  const handleLogout = async () => {
-    await logout();
-    setMaps([]);
-  };
-
   if (authLoading || mapsLoading) return <LoadingScreen />;
 
-  // Use the new LandingPage component when not logged in
   if (!user) {
     return <LandingPage onGetStarted={() => router.push('/login')} />;
   }
@@ -325,22 +280,17 @@ export default function Dashboard() {
           setIsOpen: setIsTrashOpen,
           count: trashedMaps.length
         }}
-      // Force transparency/glass for header to match new theme
-      // We might need to handle this inside Header, but for now let's leave Header as is or assume it adapts if it uses transparency.
-      // Actually, let's pass a prop or rely on it adapting to dark mode if we were switching mode, 
-      // but here we are forcing a style. The Header has hardcoded colors.
-      // Let's rely on the user having transparency in Header already (bg-white/80 etc).
       />
 
       <main className="container mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
-          <h2 className="text-2xl font-bold text-white">Your Projects</h2>
+          <h2 className="text-2xl font-bold text-white">Your Mind Maps</h2>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          {/* Create New Project Card */}
+          {/* Create New Mind Map Card */}
           <button
-            onClick={() => setIsNewProjectModalOpen(true)}
+            onClick={() => setIsNameModalOpen(true)}
             className="group flex flex-col items-center justify-center h-48 bg-white/5 backdrop-blur-md rounded-[30px] border border-white/10 hover:border-blue-500/50 hover:bg-white/10 transition-all cursor-pointer shadow-[0_20px_60px_rgba(0,0,0,0.4)]"
           >
             <div className="w-12 h-12 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform shadow-lg shadow-blue-500/10">
@@ -348,20 +298,14 @@ export default function Dashboard() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
               </svg>
             </div>
-            <span className="font-medium text-gray-300 group-hover:text-blue-400">Create New Project</span>
+            <span className="font-medium text-gray-300 group-hover:text-blue-400">Create New Mind Map</span>
           </button>
 
-          {/* Project Cards */}
+          {/* Mind Map Cards */}
           {activeMaps.map((map) => (
             <div
               key={map.id}
-              onClick={() => {
-                if (map.type === 'book') {
-                  router.push(`/book/${map.id}`);
-                } else {
-                  router.push(`/map/${map.id}`);
-                }
-              }}
+              onClick={() => router.push(`/map/${map.id}`)}
               className="group relative flex flex-col h-48 bg-white/5 backdrop-blur-md rounded-[30px] shadow-[0_20px_60px_rgba(0,0,0,0.4)] hover:shadow-[0_20px_60px_rgba(0,0,0,0.6)] border border-white/10 hover:border-white/20 overflow-hidden cursor-pointer transition-all hover:-translate-y-1"
             >
               {/* Pin & Trash Buttons */}
@@ -384,7 +328,7 @@ export default function Dashboard() {
                 </button>
               </div>
 
-              {/* Pinned Indicator on card if pinned (always visible) */}
+              {/* Pinned Indicator */}
               {map.isPinned && (
                 <div className="absolute top-2 left-2 z-10">
                   <span className="text-blue-500">
@@ -396,20 +340,14 @@ export default function Dashboard() {
               )}
 
               <div className="flex-1 p-6 bg-transparent">
-                <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-4 ${map.type === 'book' ? 'bg-amber-500/20 text-amber-400' : 'bg-purple-500/20 text-purple-400'} shadow-lg shadow-black/5`}>
-                  {map.type === 'book' ? (
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
-                    </svg>
-                  ) : (
-                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-                    </svg>
-                  )}
+                <div className="w-10 h-10 rounded-lg flex items-center justify-center mb-4 bg-purple-500/20 text-purple-400 shadow-lg shadow-black/5">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
+                  </svg>
                 </div>
                 <h3 className="font-semibold text-white truncate pr-4">{map.title}</h3>
                 <p className="text-xs text-gray-400 mt-2">
-                  {map.type === 'book' ? 'Digital Book' : 'Mind Map'} • {new Date(map.updatedAt).toLocaleDateString()}
+                  Mind Map • {new Date(map.updatedAt).toLocaleDateString()}
                 </p>
               </div>
             </div>
@@ -417,106 +355,19 @@ export default function Dashboard() {
         </div>
       </main>
 
-      {/* Project Type Selection Modal */}
-      {isNewProjectModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl p-6 w-full max-w-2xl mx-4 transform transition-all scale-100">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-bold text-gray-800 dark:text-white">Create New</h3>
-              <button onClick={() => setIsNewProjectModalOpen(false)} className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Map Option */}
-              <button
-                onClick={() => {
-                  setSelectedType('map');
-                  setIsNewProjectModalOpen(false);
-                  setIsNameModalOpen(true);
-                }}
-                className="flex flex-col items-center p-8 bg-blue-50 dark:bg-zinc-700/50 rounded-xl border-2 border-transparent hover:border-blue-500 transition-all text-center"
-              >
-                <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-4">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.59 14.37a6 6 0 01-5.84 7.38v-4.8m5.84-2.58a14.98 14.98 0 006.16-12.12A14.98 14.98 0 009.631 8.41m5.96 5.96a14.926 14.926 0 01-5.841 2.58m-.119-8.54a6 6 0 00-7.381 5.84h4.8m2.581-5.84a14.927 14.927 0 00-2.58 5.84m2.699 2.7c-.103.021-.207.041-.311.06a15.09 15.09 0 01-2.448-2.448 14.9 14.9 0 01.06-.312m-2.24 2.39a4.493 4.493 0 00-1.757 4.306 4.493 4.493 0 004.306-1.758M16.5 9a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z" />
-                  </svg>
-                </div>
-                <h4 className="text-lg font-bold text-gray-800 dark:text-white">Mind Map</h4>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Visualize your thoughts with interactive maps.</p>
-              </button>
-
-              {/* Book Option */}
-              <button
-                onClick={() => {
-                  if (userData?.role === 'admin') {
-                    setSelectedType('book');
-                    setIsNewProjectModalOpen(false);
-                    setIsNameModalOpen(true);
-                  } else {
-                    setIsNewProjectModalOpen(false);
-                    setIsConstructionModalOpen(true);
-                  }
-                }}
-                className="relative flex flex-col items-center p-8 bg-amber-50 dark:bg-zinc-700/50 rounded-xl border-2 border-transparent hover:border-amber-500 transition-all text-center overflow-hidden"
-              >
-                {/* Under Construction Badge */}
-                <div className="absolute top-2 right-2 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 text-[10px] font-bold px-2 py-1 rounded-full uppercase tracking-wider border border-amber-200 dark:border-amber-700/50">
-                  Under Construction
-                </div>
-
-                <div className="w-16 h-16 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-4">
-                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8">
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 6.042A8.967 8.967 0 006 3.75c-1.052 0-2.062.18-3 .512v14.25A8.987 8.987 0 016 18c2.305 0 4.408.867 6 2.292m0-14.25a8.966 8.966 0 016-2.292c1.052 0 2.062.18 3 .512v14.25A8.987 8.987 0 0018 18a8.967 8.967 0 00-6 2.292m0-14.25v14.25" />
-                  </svg>
-                </div>
-                <h4 className="text-lg font-bold text-gray-800 dark:text-white">Digital Book</h4>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">Write and organize your ideas in a book format.</p>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Under Construction Modal */}
-      {isConstructionModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl p-6 w-full max-w-sm mx-4 transform transition-all scale-100 text-center">
-            <div className="w-16 h-16 bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-8 h-8">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M11.42 15.17L17.25 21A2.652 2.652 0 0021 17.25l-5.877-5.877M11.42 15.17l2.496-3.03c.317-.384.74-.626 1.208-.766M11.42 15.17l-4.655 5.653a2.548 2.548 0 11-3.586-3.586l6.837-5.63m5.108-.233c.55-.164 1.163-.188 1.743-.14a4.5 4.5 0 004.486-6.336l-3.276 3.277a3.004 3.004 0 01-2.25-2.25l3.276-3.276a4.5 4.5 0 00-6.336 4.486c.091 1.076-.071 2.264-.904 2.95l-.102.085m-1.745 1.437L5.909 7.5H4.5L2.25 3.75l1.5-1.5L7.5 4.5v1.409l4.26 4.26m-1.745 1.437l1.745-1.437m6.615 8.206L15.75 15.75M4.867 19.125h.008v.008h-.008v-.008z" />
-              </svg>
-            </div>
-            <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-2">Coming Soon</h3>
-            <p className="text-gray-600 dark:text-gray-400 mb-6">
-              This feature is currently under construction and will be available soon.
-            </p>
-            <button
-              onClick={() => setIsConstructionModalOpen(false)}
-              className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg shadow-lg shadow-blue-500/30 transition-all"
-            >
-              Okay
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Name Input Modal */}
       {isNameModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
           <div className="bg-white dark:bg-zinc-800 rounded-2xl shadow-2xl p-6 w-full max-w-md mx-4 transform transition-all scale-100">
             <h3 className="text-xl font-bold text-gray-800 dark:text-white mb-4">
-              {selectedType === 'map' ? 'New Mind Map' : 'New Digital Book'}
+              New Mind Map
             </h3>
 
             <input
               autoFocus
               type="text"
-              placeholder={selectedType === 'book' ? "Book Name" : "Project Name"}
-              className="w-full px-4 py-2 mb-4 border border-gray-300 dark:border-zinc-600 rounded-lg bg-gray-50 dark:bg-zinc-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+              placeholder="Mind Map Name"
+              className="w-full px-4 py-2 mb-6 border border-gray-300 dark:border-zinc-600 rounded-lg bg-gray-50 dark:bg-zinc-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
               value={newMapTitle}
               onChange={(e) => setNewMapTitle(e.target.value)}
               onKeyDown={(e) => {
@@ -524,41 +375,6 @@ export default function Dashboard() {
                 if (e.key === 'Escape') setIsNameModalOpen(false);
               }}
             />
-
-            {selectedType === 'book' && (
-              <div className="mb-6 space-y-4 animate-in slide-in-from-top-2">
-                {/* Orientation */}
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-2">Page Orientation</label>
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => setBookOrientation('portrait')}
-                      className={`flex-1 py-2 rounded-lg border flex items-center justify-center gap-2 text-sm font-medium transition-colors ${bookOrientation === 'portrait' ? 'bg-blue-50 border-blue-500 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300' : 'border-gray-200 dark:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-800'}`}
-                    >
-                      <span className="w-3 h-4 border border-current rounded-sm"></span> Portrait
-                    </button>
-                    <button
-                      onClick={() => setBookOrientation('landscape')}
-                      className={`flex-1 py-2 rounded-lg border flex items-center justify-center gap-2 text-sm font-medium transition-colors ${bookOrientation === 'landscape' ? 'bg-blue-50 border-blue-500 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300' : 'border-gray-200 dark:border-zinc-700 hover:bg-gray-50 dark:hover:bg-zinc-800'}`}
-                    >
-                      <span className="w-4 h-3 border border-current rounded-sm"></span> Landscape
-                    </button>
-                  </div>
-                </div>
-
-                {/* Subject */}
-                <div>
-                  <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Subject / Description (Optional)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Science Notes"
-                    className="w-full px-4 py-2 border border-gray-300 dark:border-zinc-600 rounded-lg bg-gray-50 dark:bg-zinc-900 dark:text-white focus:ring-2 focus:ring-blue-500 outline-none transition-all text-sm"
-                    value={bookSubject}
-                    onChange={e => setBookSubject(e.target.value)}
-                  />
-                </div>
-              </div>
-            )}
 
             <div className="flex justify-end gap-3">
               <button

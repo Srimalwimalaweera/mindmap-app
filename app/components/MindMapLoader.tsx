@@ -2,6 +2,6 @@
 
 import dynamic from 'next/dynamic';
 
-const MindMapEditor = dynamic(() => import('./MindMapEditor'), { ssr: false });
+const MindMapEditor = dynamic(() => import('./AstMindMapEditor'), { ssr: false });
 
 export default MindMapEditor;

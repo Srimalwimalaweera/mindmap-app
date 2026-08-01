@@ -51,7 +51,7 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
     const { user, userData, refreshUserData } = useAuth();
     const [newName, setNewName] = useState(user?.displayName || '');
     const [loading, setLoading] = useState(false);
-    const [counts, setCounts] = useState({ maps: 0, books: 0 });
+    const [counts, setCounts] = useState({ maps: 0 });
     const [msg, setMsg] = useState('');
 
     useEffect(() => {
@@ -127,14 +127,10 @@ export function ProfileModal({ isOpen, onClose, onSwitchModal }: { isOpen: boole
                     </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 my-4">
+                <div className="my-4">
                     <div className="p-3 bg-zinc-50 dark:bg-zinc-700/50 rounded-lg text-center border border-zinc-100 dark:border-zinc-600">
                         <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{counts.maps}</div>
                         <div className="text-xs text-zinc-500">Mind Maps</div>
-                    </div>
-                    <div className="p-3 bg-zinc-50 dark:bg-zinc-700/50 rounded-lg text-center border border-zinc-100 dark:border-zinc-600">
-                        <div className="text-2xl font-bold text-amber-600 dark:text-amber-400">{counts.books}</div>
-                        <div className="text-xs text-zinc-500">Digital Books</div>
                     </div>
                 </div>
 

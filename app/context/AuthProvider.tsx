@@ -21,7 +21,6 @@ export interface UserData {
     pinLimit: number;     // Calculated based on Plan + Purchased Pins
     extraPins: number;    // Purchased extra pins
     totalMaps: number;    // Statistics
-    totalBooks: number;   // Statistics
     autoSaveInterval: number; // User preference
     role: 'member' | 'admin';
     banUntil?: number;
@@ -46,7 +45,6 @@ export interface AppSettings {
         ultra: number;
     };
     autoSaveOptions: { label: string; value: number; minPlan: 'free' | 'pro' | 'ultra' }[];
-    bookAutoSaveOptions: { label: string; value: number; minPlan: 'free' | 'pro' | 'ultra' }[];
     additionalProjectSlots: { label: string; price: number; slots: number }[];
     additionalPinSlots: { label: string; price: number; slots: number }[];
     bankDetails: {
@@ -109,9 +107,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const limitsDoc = await getDoc(doc(db, 'settings', 'default_project_limit'));
             // Fetch auto_saving_times for Mind Maps (Restoring logic)
             const autoSaveDoc = await getDoc(doc(db, 'settings', 'auto_saving_times'));
-            // Fetch book_autosave_times for Books (New logic)
-            const bookAutoSaveDoc = await getDoc(doc(db, 'settings', 'book_autosave_times'));
-
             const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
             const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins'));
             const bankDoc = await getDoc(doc(db, 'settings', 'bank_details'));
@@ -150,7 +145,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     ultra: limitsDoc.data()?.ultra ?? 50,
                 },
                 autoSaveOptions: [],
-                bookAutoSaveOptions: [],
                 additionalProjectSlots: [],
                 additionalPinSlots: [],
                 bankDetails: {
@@ -176,22 +170,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     });
                 });
                 parsedSettings.autoSaveOptions = options.sort((a, b) => a.value - b.value);
-            }
-
-            // Parse Auto/Save Times for Books (book_autosave_times)
-            if (bookAutoSaveDoc.exists()) {
-                const data = bookAutoSaveDoc.data();
-                const options: any[] = [];
-                Object.values(data).forEach((val: any) => {
-                    const isDisable = val === 'desable';
-                    const minutes = isDisable ? 0 : Number(val);
-                    options.push({
-                        label: isDisable ? 'Disable Auto-save' : `${minutes} min`,
-                        value: isDisable ? 0 : minutes * 60 * 1000,
-                        minPlan: getMinPlan(isDisable ? 'desable' : minutes)
-                    });
-                });
-                parsedSettings.bookAutoSaveOptions = options.sort((a, b) => a.value - b.value);
             }
 
             // Parse Add Project Slots
@@ -286,7 +264,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     pinLimit: data.pinLimit || 5,
                     extraPins: data.extraPins || 0,
                     totalMaps: data.totalMaps || 0,
-                    totalBooks: data.totalBooks || 0,
                     autoSaveInterval: data.autoSaveInterval ?? 1800000, // Default 30 min if undefined
                     role: data.role || 'member',
                     banUntil: data.banUntil,
@@ -307,7 +284,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     pinLimit: 5,      // Default free
                     extraPins: 0,
                     totalMaps: 0,
-                    totalBooks: 0,
                     autoSaveInterval: 1800000, // 30 min
                     role: 'member'
                 };
