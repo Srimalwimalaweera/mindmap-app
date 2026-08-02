@@ -54,9 +54,28 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
 
     // Refs for Gestures
     const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const [longPressProgress, setLongPressProgress] = useState<{ x: number, y: number } | null>(null);
+    const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const holdStartPos = useRef<{ x: number, y: number, clientX: number, clientY: number } | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const holdNodeInfo = useRef<{ nodeId: string, payload: any } | null>(null);
+    const longPressHandledRef = useRef<boolean>(false);
+    const contextMenuOpenedAtRef = useRef<number>(0);
+
+    const handleBackgroundClick = () => {
+        if (Date.now() - contextMenuOpenedAtRef.current < 500) return;
+        setContextMenu(null);
+        setButtonContextMenu(null);
+        setEmbedContextMenu(null);
+    };
 
     const [viewMode, setViewMode] = useState<ViewMode>('visual');
+    const [fullscreenEmbed, setFullscreenEmbed] = useState<string | null>(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    
+    const [buttonContextMenu, setButtonContextMenu] = useState<{ x: number; y: number; nodeId: string; url: string; exactContent: string } | null>(null);
+    const [embedContextMenu, setEmbedContextMenu] = useState<{ x: number; y: number; nodeId: string; embedCode: string; exactContent: string } | null>(null);
 
     // Onboarding State
     const [showOnboarding, setShowOnboarding] = useState(false);
@@ -155,6 +174,9 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         zoom: true,
                         pan: true,
                     });
+                    
+                    // Disable double-click to zoom so that double-tap to edit works on mobile
+                    d3.select(svgElement).on('dblclick.zoom', null);
 
                     // 2. Load Data
                     if (markdown) {
@@ -242,6 +264,12 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                     svg.on('contextmenu', null);
 
                     svg.on('click', function (event) {
+                        if (longPressHandledRef.current) {
+                            longPressHandledRef.current = false;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            return;
+                        }
                         dismissOnboarding(); // Dismiss on any click
                         const target = event.target as Element;
 
@@ -262,6 +290,18 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 }
                                 // Trigger update to refit if size changed significantly, though d3 zoom might not auto-adjust
                                 // mmRef.current.fit(); // Optional: might be too jarring
+                            }
+                            return;
+                        }
+
+                        // EMBED FULLSCREEN BUTTON
+                        const embedFsBtn = target.closest('.embed-fullscreen-btn') as HTMLElement;
+                        if (embedFsBtn) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const encodedEmbed = embedFsBtn.getAttribute('data-code');
+                            if (encodedEmbed) {
+                                setFullscreenEmbed(decodeURIComponent(encodedEmbed));
                             }
                             return;
                         }
@@ -332,6 +372,32 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                             exactContent = dataNode.payload?.fullContent || dataNode.content;
                                         }
 
+                                        if (exactContent?.includes('data-category="button"')) {
+                                            const urlMatch = exactContent.match(/data-url="([^"]*)"/);
+                                            const url = urlMatch ? urlMatch[1] : '';
+                                            setButtonContextMenu({
+                                                nodeId,
+                                                x: rect.left - wrapperRect.left + (rect.width / 2),
+                                                y: rect.top - wrapperRect.top + (rect.height / 2),
+                                                url,
+                                                exactContent
+                                            });
+                                            return;
+                                        }
+                                        
+                                        if (exactContent?.includes('data-category="embed"')) {
+                                            const embedMatch = exactContent.match(/data-embedcode="([^"]*)"/);
+                                            const embedCode = embedMatch ? decodeURIComponent(embedMatch[1]) : '';
+                                            setEmbedContextMenu({
+                                                nodeId,
+                                                x: rect.left - wrapperRect.left + (rect.width / 2),
+                                                y: rect.top - wrapperRect.top + (rect.height / 2),
+                                                embedCode,
+                                                exactContent
+                                            });
+                                            return;
+                                        }
+
                                         setEditing({
                                             id: nodeId,
                                             x: rect.left - wrapperRect.left,
@@ -361,7 +427,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                                     return next;
                                                 });
                                             }
-                                        }, 250);
+                                        }, 400);
                                     }
                                 }
                             }
@@ -373,9 +439,87 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         // unless we specifically want to cancel.
                         // But clicking background IS a "blur" event usually.
 
-                        setContextMenu(null);
+                        handleBackgroundClick();
                         setDownloadMenuOpen(false);
                     });
+
+                    // Custom Long Press Logic (Pointer Events)
+                    const clearHold = () => {
+                        if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+                        if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
+                        holdTimerRef.current = null;
+                        animationTimerRef.current = null;
+                        holdStartPos.current = null;
+                        setLongPressProgress(null);
+                    };
+
+                    svg.on('pointerdown', function (event: PointerEvent) {
+                        longPressHandledRef.current = false;
+                        if (event.pointerType !== 'touch' && event.button !== 0) return;
+                        const target = event.target as Element;
+                        const textEl = target.closest('text, foreignObject');
+                        if (textEl && wrapperRef.current) {
+                            const nodeGroup = target.closest('g.markmap-node');
+                            if (nodeGroup) {
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                const d = d3.select(nodeGroup).datum() as any;
+                                const dataNode = d?.data || d;
+                                const nodeId = dataNode.state?.id || dataNode.id || 'unknown';
+                                
+                                // Disable context menu for Root Node (Depth 0)
+                                if ((d?.depth === 0) || (dataNode?.depth === 0)) {
+                                    return;
+                                }
+
+                                const [bx, by] = d3.pointer(event, wrapperRef.current);
+                                holdStartPos.current = { x: bx, y: by, clientX: event.clientX, clientY: event.clientY };
+                                holdNodeInfo.current = { nodeId, payload: dataNode.payload || {} };
+                                
+                                // Delay the animation by 200ms to avoid flashes on short taps
+                                animationTimerRef.current = setTimeout(() => {
+                                    setLongPressProgress({ x: bx, y: by });
+                                }, 200);
+                                
+                                holdTimerRef.current = setTimeout(() => {
+                                    if (holdStartPos.current) {
+                                        let adjustedX = holdStartPos.current.x;
+                                        let adjustedY = holdStartPos.current.y;
+                                        const menuWidth = 200;
+                                        const menuHeight = 280;
+                                        if (holdStartPos.current.clientX + menuWidth > window.innerWidth) adjustedX -= menuWidth;
+                                        if (holdStartPos.current.clientY + menuHeight > window.innerHeight) adjustedY -= menuHeight;
+                                        
+                                        contextMenuOpenedAtRef.current = Date.now();
+                                        setContextMenu({
+                                            x: adjustedX,
+                                            y: adjustedY,
+                                            nodeId: holdNodeInfo.current!.nodeId,
+                                            payload: holdNodeInfo.current!.payload
+                                        });
+                                        
+                                        longPressHandledRef.current = true;
+                                        clearHold();
+                                        
+                                        // Vibrate if supported
+                                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                            navigator.vibrate(50);
+                                        }
+                                    }
+                                }, 600);
+                            }
+                        }
+                    });
+
+                    svg.on('pointermove', function (event: PointerEvent) {
+                        if (holdStartPos.current) {
+                            const dx = event.clientX - holdStartPos.current.clientX;
+                            const dy = event.clientY - holdStartPos.current.clientY;
+                            if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearHold();
+                        }
+                    });
+
+                    svg.on('pointerup', clearHold);
+                    svg.on('pointercancel', clearHold);
 
                     // D. Context Menu (Right Click)
                     svg.on('contextmenu', function (event) {
@@ -398,9 +542,22 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 }
 
                                 const [bx, by] = d3.pointer(event, wrapperRef.current);
+                                
+                                const menuWidth = 200;
+                                const menuHeight = 280;
+                                let adjustedX = bx;
+                                let adjustedY = by;
+                                
+                                if (event.clientX + menuWidth > window.innerWidth) {
+                                    adjustedX = bx - menuWidth;
+                                }
+                                if (event.clientY + menuHeight > window.innerHeight) {
+                                    adjustedY = by - menuHeight;
+                                }
+
                                 setContextMenu({
-                                    x: bx,
-                                    y: by,
+                                    x: adjustedX,
+                                    y: adjustedY,
                                     nodeId: nodeId,
                                     payload: dataNode.payload || {}
                                 });
@@ -1061,7 +1218,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
     };
 
     return (
-        <div ref={wrapperRef} className="w-full h-full relative overflow-hidden bg-transparent group select-none text-white">
+        <div ref={wrapperRef} onContextMenu={(e) => e.preventDefault()} className="w-full h-full relative overflow-hidden bg-transparent group select-none text-white">
             {/* Visual Mode */}
             {viewMode === 'visual' && (
                 <div className="w-full h-full animate-in fade-in duration-300">
@@ -1094,13 +1251,41 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                             </div>
                         </div>
                     )}
+                    {/* Long Press Indicator */}
+                    {longPressProgress && (
+                        <div
+                            className="loader"
+                            style={{
+                                left: longPressProgress.x,
+                                top: longPressProgress.y,
+                            }}
+                        >
+                            <div className="inner one"></div>
+                            <div className="inner two"></div>
+                            <div className="inner three"></div>
+                        </div>
+                    )}
 
                     {/* Context Menu */}
-                    {contextMenu && (() => {
-                        const isRootNode = contextMenu.payload?.lines?.[0] === 0 || contextMenu.payload?.depth === 0;
+                    {contextMenu && (
+                        <>
+                            <div 
+                                className="fixed inset-0 z-[9999]"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleBackgroundClick();
+                                }}
+                                onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleBackgroundClick();
+                                }}
+                            />
+                            {(() => {
+                                const isRootNode = contextMenu.payload?.lines?.[0] === 0 || contextMenu.payload?.depth === 0;
 
-                        return (
-                            <div
+                                return (
+                                    <div
                                 style={{
                                     position: 'absolute',
                                     left: contextMenu.x,
@@ -1127,7 +1312,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                         });
                                         setContextMenu(null);
                                     }}
-                                    className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center justify-between group transition-colors"
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center justify-between group transition-colors"
                                 >
                                     <span className="flex items-center gap-2">
                                         <span className="p-1 rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
@@ -1158,7 +1343,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                                 });
                                                 setContextMenu(null);
                                             }}
-                                            className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center justify-between group transition-colors"
+                                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center justify-between group transition-colors"
                                         >
                                             <span className="flex items-center gap-2">
                                                 <span className="p-1 rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
@@ -1186,7 +1371,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                                 });
                                                 setContextMenu(null);
                                             }}
-                                            className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-purple-600/20 text-purple-300 hover:text-white flex items-center justify-between group transition-colors"
+                                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-purple-600/20 text-purple-300 hover:text-white flex items-center justify-between group transition-colors"
                                         >
                                             <span className="flex items-center gap-2">
                                                 <span className="p-1 rounded-lg bg-purple-500/20 text-purple-400 group-hover:bg-purple-500 group-hover:text-white transition-colors">
@@ -1203,7 +1388,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
 
                                 <button
                                     onClick={handleEditFromContext}
-                                    className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
                                 >
                                     <span className="p-1 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
@@ -1213,7 +1398,7 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
 
                                 <button
                                     onClick={handleDelete}
-                                    className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-rose-600/20 text-rose-300 hover:text-rose-200 flex items-center gap-2 group transition-colors"
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-rose-600/20 text-rose-300 hover:text-rose-200 flex items-center gap-2 group transition-colors"
                                 >
                                     <span className="p-1 rounded-lg bg-rose-500/20 text-rose-400 group-hover:bg-rose-500 group-hover:text-white transition-colors">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
@@ -1223,6 +1408,8 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                             </div>
                         );
                     })()}
+                    </>
+                    )}
 
                     {editing && (() => {
                         const isExistingTableNode = editing.id !== 'NEW_CHILD' &&
@@ -1244,23 +1431,17 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                         }
 
                         return (
-                            <div
-                                style={{
-                                    position: 'fixed',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: 'translate(-50%, -50%)',
-                                    zIndex: 9999,
-                                }}
-                            >
-                                <NodeInputControl
-                                    initialValue={editing.text}
-                                    nodeId={editing.id}
-                                    onSubmit={(val) => {
-                                        handleSave(val);
-                                    }}
-                                    onCancel={() => setEditing(null)}
-                                />
+                            <div className="fixed inset-0 z-[9999] flex items-center justify-center pointer-events-none">
+                                <div className="pointer-events-auto">
+                                    <NodeInputControl
+                                        initialValue={editing.text}
+                                        nodeId={editing.id}
+                                        onSubmit={(val) => {
+                                            handleSave(val);
+                                        }}
+                                        onCancel={() => setEditing(null)}
+                                    />
+                                </div>
                             </div>
                         );
                     })()}
@@ -1452,6 +1633,180 @@ export default function MindMapEditor({ markdown, onMarkdownChange, onUndo, onRe
                                 <span className="text-[10px] opacity-80">to start creating your map!</span>
                             </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Button Double Click Context Menu */}
+            {buttonContextMenu && (
+                <>
+                    <div className="fixed inset-0 z-[9997]" onClick={() => setButtonContextMenu(null)} />
+                    <div
+                        className="absolute z-[9998] bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 shadow-2xl rounded-2xl p-2 w-[180px] sm:w-[220px] flex flex-col gap-1 context-menu-enter"
+                        style={{
+                            left: buttonContextMenu.x,
+                            top: buttonContextMenu.y,
+                            transform: 'translate(-50%, -50%)'
+                        }}
+                    >
+                        <button
+                            onClick={() => {
+                                window.open(buttonContextMenu.url, '_blank');
+                                setButtonContextMenu(null);
+                            }}
+                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center gap-2 group transition-colors"
+                        >
+                            <span className="p-1 rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                            </span>
+                            Click Button
+                        </button>
+                        <button
+                            onClick={() => {
+                                setEditing({
+                                    id: buttonContextMenu.nodeId,
+                                    x: buttonContextMenu.x,
+                                    y: buttonContextMenu.y,
+                                    text: buttonContextMenu.exactContent,
+                                    isGhost: false,
+                                    payload: {},
+                                    depth: 0,
+                                    mode: 'input'
+                                });
+                                setButtonContextMenu(null);
+                            }}
+                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                        >
+                            <span className="p-1 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                            </span>
+                            Edit Node
+                        </button>
+                    </div>
+                </>
+            )}
+
+            {/* Embed Double Click Context Menu */}
+            {embedContextMenu && (
+                <>
+                    <div className="fixed inset-0 z-[9997]" onClick={() => setEmbedContextMenu(null)} />
+                    <div
+                        className="absolute z-[9998] bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 shadow-2xl rounded-2xl p-2 w-[200px] sm:w-[240px] flex flex-col gap-1 context-menu-enter"
+                        style={{
+                            left: embedContextMenu.x,
+                            top: embedContextMenu.y,
+                            transform: 'translate(-50%, -50%)'
+                        }}
+                    >
+                        <button
+                            onClick={() => {
+                                const match = embedContextMenu.embedCode.match(/src="([^"]+)"/);
+                                if (match) {
+                                    window.open(match[1], '_blank');
+                                } else {
+                                    alert("No URL found in this embed.");
+                                }
+                                setEmbedContextMenu(null);
+                            }}
+                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center gap-2 group transition-colors"
+                        >
+                            <span className="p-1 rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                            </span>
+                            Open in New Window
+                        </button>
+                        <button
+                            onClick={() => {
+                                setFullscreenEmbed(embedContextMenu.embedCode);
+                                setEmbedContextMenu(null);
+                            }}
+                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center gap-2 group transition-colors"
+                        >
+                            <span className="p-1 rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                            </span>
+                            Show Here
+                        </button>
+                        <button
+                            onClick={() => {
+                                setEditing({
+                                    id: embedContextMenu.nodeId,
+                                    x: embedContextMenu.x,
+                                    y: embedContextMenu.y,
+                                    text: embedContextMenu.exactContent,
+                                    isGhost: false,
+                                    payload: {},
+                                    depth: 0,
+                                    mode: 'input'
+                                });
+                                setEmbedContextMenu(null);
+                            }}
+                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                        >
+                            <span className="p-1 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                            </span>
+                            Edit Node
+                        </button>
+                    </div>
+                </>
+            )}
+
+            {/* Fullscreen Embed Modal */}
+            {fullscreenEmbed && (
+                <div 
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                        backdropFilter: 'blur(8px)',
+                        zIndex: 99999,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '40px'
+                    }}
+                    onClick={() => setFullscreenEmbed(null)}
+                >
+                    <button
+                        onClick={() => setFullscreenEmbed(null)}
+                        style={{
+                            position: 'absolute',
+                            top: '24px',
+                            right: '24px',
+                            background: 'rgba(255,255,255,0.1)',
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            borderRadius: '50%',
+                            width: '40px',
+                            height: '40px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'white',
+                            cursor: 'pointer',
+                            transition: '0.2s',
+                            zIndex: 100000
+                        }}
+                        onMouseOver={e => e.currentTarget.style.background='rgba(255,255,255,0.2)'}
+                        onMouseOut={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                    
+                    <div 
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                            width: '90vw',
+                            height: '80vh',
+                            maxWidth: '1400px',
+                            background: '#0f172a',
+                            borderRadius: '16px',
+                            overflow: 'hidden',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+                        }}
+                    >
+                        <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: fullscreenEmbed }} />
                     </div>
                 </div>
             )}

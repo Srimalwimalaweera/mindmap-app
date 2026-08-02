@@ -56,11 +56,8 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
     // ... (Logos and Navigation logic remains same)
 
     return (
-        <header className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 bg-white/5 backdrop-blur-md shadow-sm border-b border-white/10">
-            {/* Logo Section ... (Keep as is, just copy logic if needed or assume unchanged outside replace block if small) */}
-            {/* Actually I need to be careful not to delete the logo section if I replace huge chunks. 
-                 Let's target the exact return block or render user section. 
-             */}
+        <header className="sticky top-0 z-10 flex items-center justify-between px-4 sm:px-6 py-4 bg-white/5 backdrop-blur-md shadow-sm border-b border-white/10">
+            {/* Logo Section */}
             <div className="flex items-center gap-2">
                 {isEditMode && (
                     <button
@@ -75,7 +72,7 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                     </button>
                 )}
                 <Link href="/" className="flex items-center gap-2" title="Go to Dashboard">
-                    {/* SVG Logo ... keep existing ... */}
+                    {/* SVG Logo ... */}
                     <div className="w-8 h-8 flex items-center justify-center">
                         <svg version="1.1" id="Layer_1" xmlns="http://www.w3.org/2000/svg" xmlnsXlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
                             viewBox="0 0 128 128" enableBackground="new 0 0 128 128" xmlSpace="preserve" className="w-full h-full">
@@ -92,12 +89,12 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                         </svg>
                     </div>
                     {!hideTitle && (
-                        <h1 className="text-xl font-bold text-white">VISUAL MIND MAP</h1>
+                        <h1 className="text-xl font-bold text-white hidden sm:block">VISUAL MIND MAP</h1>
                     )}
                 </Link>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
                 {/* Actions (like Save button) */}
                 {actions && (
                     <div className="flex items-center">
@@ -110,7 +107,7 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
                         {/* Search */}
                         {search && (
                             <div className="relative flex items-center">
-                                <div className={`overflow-hidden transition-all duration-300 ease-in-out ${search.isOpen ? 'w-64 opacity-100' : 'w-0 opacity-0'}`}>
+                                <div className={`overflow-hidden transition-all duration-300 ease-in-out ${search.isOpen ? 'w-32 sm:w-64 opacity-100' : 'w-0 opacity-0'}`}>
                                     <input
                                         type="text"
                                         placeholder="Search projects..."

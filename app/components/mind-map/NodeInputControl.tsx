@@ -5,7 +5,8 @@ import {
     Bold, Italic, Underline, Strikethrough, Highlighter,
     Link as LinkIcon, CheckSquare, Code, List, Table as TableIcon,
     Image as ImageIcon, Video, X, Check, Film, Plus,
-    Type, Sparkles, Trash2, Edit2, Grid
+    Type, Sparkles, Trash2, Edit2, Grid, Maximize2, Minimize2,
+    MousePointer2, AppWindow
 } from 'lucide-react';
 import { useAuth } from '@/app/context/AuthProvider';
 import TableEditorModal from './TableEditorModal';
@@ -20,7 +21,7 @@ interface NodeInputControlProps {
     nodeId: string;
 }
 
-type NodeCategory = 'text' | 'task' | 'link' | 'media' | 'table' | 'code';
+type NodeCategory = 'text' | 'task' | 'link' | 'media' | 'table' | 'code' | 'button' | 'embed';
 
 interface TaskItem {
     id: string;
@@ -136,13 +137,17 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
 
     // Robust Category Matching
     const isCodeContent = decodedInitialValue.includes('```') || (decodedInitialValue.startsWith('`') && decodedInitialValue.endsWith('`')) || decodedInitialValue.includes('data-category="code"');
-    const isLinkContent = decodedInitialValue.includes('data-category="link"') || !!decodedInitialValue.match(/\[.*?\]\(.*?\)/);
+    const isButtonContent = decodedInitialValue.includes('data-category="button"');
+    const isEmbedContent = decodedInitialValue.includes('data-category="embed"');
+    const isLinkContent = !isButtonContent && (decodedInitialValue.includes('data-category="link"') || !!decodedInitialValue.match(/\[.*?\]\(.*?\)/));
     const isMediaContent = decodedInitialValue.includes('<video') || decodedInitialValue.includes('![') || decodedInitialValue.includes('<img') || decodedInitialValue.includes('media-placeholder-container');
     const isTableContent = !isCodeContent && !isLinkContent && (decodedInitialValue.includes('<table>') || decodedInitialValue.includes('<table') || (decodedInitialValue.includes('|') && decodedInitialValue.includes('---')));
 
     const initialCategory: NodeCategory = isEditingExisting
         ? (initialIsTask ? 'task'
             : isCodeContent ? 'code'
+                : isButtonContent ? 'button'
+                : isEmbedContent ? 'embed'
                 : isLinkContent ? 'link'
                     : isTableContent ? 'table'
                         : isMediaContent ? 'media'
@@ -154,9 +159,19 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
     const [taskItems, setTaskItems] = useState<TaskItem[]>(initialTaskItems);
     const [isList, setIsList] = useState(initialIsList);
     const [listType, setListType] = useState<'bullet' | 'ordered'>(initialListType as 'bullet' | 'ordered');
+    const [isEditorFullscreen, setIsEditorFullscreen] = useState(false);
 
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const editorRef = useRef<HTMLDivElement>(null);
     const itemRefs = useRef(new Map<string, HTMLInputElement>());
+
+    useEffect(() => {
+        if (category === 'text' && editorRef.current) {
+            if (editorRef.current.innerHTML !== value) {
+                editorRef.current.innerHTML = value || '';
+            }
+        }
+    }, [category]);
 
     const htmlLinkMatch = decodedInitialValue.match(/<a href="([^"]*)"[^>]*data-category="link"[^>]*>.*?<\/svg>(.*?)<\/a>/);
     const mdLinkMatch = decodedInitialValue.match(/\[(.*?)\]\((.*?)\)/);
@@ -204,6 +219,56 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
         const match = decodedInitialValue.match(/```([\s\S]*?)```/);
         return match ? match[1].trim() : decodedInitialValue.startsWith('`') ? decodedInitialValue.replace(/`/g, '') : '';
     });
+
+    // Embed State
+    const [embedCode, setEmbedCode] = useState(() => {
+        const match = decodedInitialValue.match(/data-embedcode="([^"]*)"/);
+        return match ? decodeURIComponent(match[1]) : '';
+    });
+    const [embedTitle, setEmbedTitle] = useState(() => {
+        const match = decodedInitialValue.match(/data-embedtitle="([^"]*)"/);
+        return match ? decodeURIComponent(match[1]) : '';
+    });
+
+    // Button State
+    const [buttonText, setButtonText] = useState(() => {
+        const match = decodedInitialValue.match(/data-category="button"[^>]*>(.*?)<\/(a|div)>/);
+        return match ? match[1].replace(/<[^>]*>/g, '').trim() : '';
+    });
+    const [buttonUrl, setButtonUrl] = useState(() => {
+        const divMatch = decodedInitialValue.match(/data-url="([^"]*)"/);
+        if (divMatch) return divMatch[1];
+        const aMatch = decodedInitialValue.match(/<a href="([^"]*)"[^>]*data-category="button"/);
+        return aMatch ? aMatch[1] : '';
+    });
+    const [buttonStyle, setButtonStyle] = useState(() => {
+        const match = decodedInitialValue.match(/data-styles="([^"]*)"/);
+        if (match) {
+            try { return JSON.parse(decodeURIComponent(match[1])); } catch (e) {}
+        }
+        return {
+            bg: '#3b82f6',
+            text: '#ffffff',
+            radius: '8px',
+            animPreset: 'none',
+            animSpeed: 2,
+            animColor: '#ffffff'
+        };
+    });
+
+    const animScrollRef = useRef<HTMLDivElement>(null);
+    useEffect(() => {
+        const el = animScrollRef.current;
+        if (!el) return;
+        const handleWheel = (e: WheelEvent) => {
+            if (e.deltaY !== 0) {
+                e.preventDefault();
+                el.scrollLeft += e.deltaY;
+            }
+        };
+        el.addEventListener('wheel', handleWheel, { passive: false });
+        return () => el.removeEventListener('wheel', handleWheel);
+    }, []);
 
     // Client-Side Image Compression
     const compressImageToBlob = (file: File): Promise<Blob> => {
@@ -332,6 +397,81 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
             const url = linkUrl.startsWith('http://') || linkUrl.startsWith('https://') ? linkUrl : `https://${linkUrl}`;
             const label = linkText.trim() || url;
             return `<a href="${url}" target="_blank" style="color: #3b82f6; text-decoration: underline; display: flex; align-items: center; gap: 4px;" data-category="link"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>${label}</a>`;
+        }
+
+        if (category === 'button') {
+            if (!buttonUrl.trim()) return value || buttonText;
+            const url = buttonUrl.startsWith('http://') || buttonUrl.startsWith('https://') ? buttonUrl : `https://${buttonUrl}`;
+            const label = buttonText.trim() || url;
+            const styleJson = encodeURIComponent(JSON.stringify(buttonStyle));
+            
+            // Animation styles
+            let animStyle = '';
+            if (buttonStyle.animPreset && buttonStyle.animPreset !== 'none') {
+                animStyle = `animation: btn-${buttonStyle.animPreset} ${buttonStyle.animSpeed}s infinite; --btn-anim-color: ${buttonStyle.animColor || 'rgba(255,255,255,0.8)'};`;
+            }
+            
+            // Output as a <div> with data-url instead of <a> to prevent instant browser navigation in visual mode.
+            // Pointer-events are auto so hover works, but we prevent navigation in the SVG click handler.
+            // Wrapped in an outer div with padding to prevent animation cropping in Markmap's foreignObject.
+            return `<div style="padding: 16px; display: inline-block;">
+                <div class="button-node-container" data-category="button" data-url="${url}" data-styles="${styleJson}" style="display: inline-block; padding: 6px 16px; background: ${buttonStyle.bg}; color: ${buttonStyle.text}; border-radius: ${buttonStyle.radius}; font-weight: 600; text-align: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.2); cursor: default; transition: transform 0.1s; ${animStyle}" onmousedown="this.style.transform='scale(0.95)'" onmouseup="this.style.transform='scale(1)'" onmouseleave="this.style.transform='scale(1)'">${label}</div>
+            </div>`;
+        }
+
+        if (category === 'embed') {
+            if (!embedCode.trim()) return value;
+            const encodedEmbed = encodeURIComponent(embedCode);
+            
+            // Auto-detect dimensions
+            let w = 300;
+            let h = 200;
+            const wMatch = embedCode.match(/width=["']?(\d+)(px|%)?["']?/i);
+            const hMatch = embedCode.match(/height=["']?(\d+)(px|%)?["']?/i);
+            
+            if (wMatch && wMatch[1]) {
+                const parsedW = parseInt(wMatch[1]);
+                // if it's a percentage or very large, cap it
+                if (wMatch[2] === '%' || parsedW > 800) w = 600;
+                else w = Math.max(200, parsedW);
+            }
+            if (hMatch && hMatch[1]) {
+                const parsedH = parseInt(hMatch[1]);
+                if (hMatch[2] === '%' || parsedH > 800) h = 400;
+                else h = Math.max(100, parsedH);
+            }
+            
+            // Constrain aspect ratio nicely if it's too large
+            if (w > 600) {
+                const ratio = h / w;
+                w = 600;
+                h = Math.round(600 * ratio);
+            }
+
+            const encodedTitle = encodeURIComponent(embedTitle.trim() || 'Embed Node');
+            const displayTitle = embedTitle.trim() || 'Embed Node';
+            
+            // Generate marquee animation for long titles
+            const titleHtml = displayTitle.length > 30 
+                ? `<div class="embed-marquee-container" style="width: 100%; overflow: hidden; white-space: nowrap; position: relative;"><div class="embed-marquee" style="display: inline-block; padding-left: 100%; animation: embedMarquee 15s linear infinite; font-weight: 600; font-size: 15px;"><span>${displayTitle}</span></div></div>` 
+                : `<div style="text-align: left; font-weight: 600; font-size: 15px; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${displayTitle}</div>`;
+
+            return `<div class="embed-node-container" data-category="embed" data-embedcode="${encodedEmbed}" data-embedtitle="${encodedTitle}" style="position: relative; width: ${w}px; border-radius: 12px; overflow: hidden; background: rgba(30, 41, 59, 0.9); border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); display: flex; flex-direction: column;">
+                <div class="embed-header" style="width: 100%; height: 32px; padding: 0 12px 0 16px; background: rgba(15, 23, 42, 0.9); color: rgba(255,255,255,0.9); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: space-between; pointer-events: auto; cursor: pointer;">
+                    <div style="flex: 1; overflow: hidden; display: flex; align-items: center;">
+                        ${titleHtml}
+                    </div>
+                    <div class="embed-side-panel-btn" style="padding: 4px; border-radius: 4px; display: flex; align-items: center; justify-content: center; transition: background 0.2s; margin-left: 8px; color: rgba(255,255,255,0.7);" onmouseover="this.style.background='rgba(255,255,255,0.1)'; this.style.color='#fff'" onmouseout="this.style.background='transparent'; this.style.color='rgba(255,255,255,0.7)'">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="12" x2="20" y2="12"></line><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="18" x2="20" y2="18"></line></svg>
+                    </div>
+                </div>
+                <div class="embed-content-area" style="width: 100%; height: ${h}px; pointer-events: auto; overflow: hidden; position: relative;">
+                    ${embedCode}
+                    <button class="embed-fullscreen-btn" data-code="${encodedEmbed}" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                    </button>
+                </div>
+            </div>`;
         }
 
         if (category === 'media') {
@@ -521,7 +661,11 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
         <>
             <div
                 onKeyDown={handleKeyDown}
-                className="flex flex-col w-[380px] sm:w-[430px] bg-slate-900/95 backdrop-blur-xl text-white rounded-2xl shadow-[0_25px_70px_rgba(0,0,0,0.6)] border border-slate-700/60 overflow-hidden ring-1 ring-white/10 animate-in fade-in zoom-in-95 duration-200"
+                className={
+                    isEditorFullscreen 
+                    ? "flex flex-col w-[95vw] h-[95vh] max-w-5xl bg-slate-900/95 backdrop-blur-xl text-white rounded-2xl shadow-[0_25px_70px_rgba(0,0,0,0.8)] border border-slate-700/60 overflow-hidden ring-1 ring-white/10 animate-in fade-in zoom-in-95 duration-200"
+                    : "flex flex-col w-[95vw] max-w-[430px] bg-slate-900/95 backdrop-blur-xl text-white rounded-2xl shadow-[0_25px_70px_rgba(0,0,0,0.6)] border border-slate-700/60 overflow-hidden ring-1 ring-white/10 animate-in fade-in zoom-in-95 duration-200"
+                }
             >
                 {/* Header Badge */}
                 <div className={`flex items-center justify-between px-4 py-2.5 bg-gradient-to-r ${actionColor} text-white shadow-md`}>
@@ -551,7 +695,7 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                             </span>
                         </div>
                     ) : (
-                        <div className="grid grid-cols-6 gap-1">
+                        <div className="grid grid-cols-4 sm:grid-cols-8 gap-1">
                             {[
                                 { id: 'text', label: 'Text', icon: Type, color: 'text-blue-400' },
                                 { id: 'task', label: 'Checklist', icon: CheckSquare, color: 'text-emerald-400' },
@@ -559,6 +703,8 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                                 { id: 'media', label: 'Media', icon: ImageIcon, color: 'text-purple-400' },
                                 { id: 'table', label: 'Table', icon: TableIcon, color: 'text-amber-400' },
                                 { id: 'code', label: 'Code', icon: Code, color: 'text-orange-400' },
+                                { id: 'button', label: 'Button', icon: MousePointer2, color: 'text-pink-400' },
+                                { id: 'embed', label: 'Embed', icon: AppWindow, color: 'text-indigo-400' },
                             ].map(cat => {
                                 const Icon = cat.icon;
                                 const isActive = category === cat.id;
@@ -581,29 +727,80 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                     )}
                 </div>
 
-                {/* Dynamic Content Area */}
-                <div className="p-3 min-h-[140px] max-h-[340px] overflow-y-auto">
+{/* Dynamic Content Area */}
+                <div className={`p-3 ${isEditorFullscreen ? 'flex-1 h-full max-h-none overflow-hidden' : 'min-h-[140px] max-h-[340px] overflow-y-auto custom-thin-scrollbar'}`}>
                     {/* 1. TEXT MODE */}
                     {category === 'text' && (
-                        <div className="flex flex-col gap-2">
-                            <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-lg border border-slate-700/40 overflow-x-auto no-scrollbar">
-                                <button onClick={() => wrapText('**')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Bold"><Bold size={13} /></button>
-                                <button onClick={() => wrapText('*')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Italic"><Italic size={13} /></button>
-                                <button onClick={() => wrapText('<u>', '</u>')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Underline"><Underline size={13} /></button>
-                                <button onClick={() => wrapText('~~')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Strikethrough"><Strikethrough size={13} /></button>
-                                <button onClick={() => wrapText('==')} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Highlight"><Highlighter size={13} /></button>
+                        <div className={`flex flex-col gap-2 ${isEditorFullscreen ? 'h-full' : ''}`}>
+                            <div className="flex items-center gap-1 p-1 bg-slate-800/50 rounded-lg border border-slate-700/40 overflow-x-auto no-scrollbar flex-wrap">
+                                <button onMouseDown={(e) => { e.preventDefault(); document.execCommand('bold', false); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Bold"><Bold size={13} /></button>
+                                <button onMouseDown={(e) => { e.preventDefault(); document.execCommand('italic', false); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Italic"><Italic size={13} /></button>
+                                <button onMouseDown={(e) => { e.preventDefault(); document.execCommand('underline', false); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Underline"><Underline size={13} /></button>
+                                <button onMouseDown={(e) => { e.preventDefault(); document.execCommand('strikeThrough', false); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Strikethrough"><Strikethrough size={13} /></button>
+                                
                                 <div className="w-[1px] h-4 bg-slate-700 mx-1" />
-                                <button onClick={toggleListMode} className={`p-1.5 rounded transition-colors ${isList ? 'bg-blue-600 text-white' : 'hover:bg-slate-700/60 text-slate-300'}`} title="Toggle List"><List size={13} /></button>
+                                
+                                <button onMouseDown={(e) => { e.preventDefault(); document.execCommand('superscript', false); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} className="px-1.5 py-0.5 font-mono text-xs hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Superscript">X²</button>
+                                <button onMouseDown={(e) => { e.preventDefault(); document.execCommand('subscript', false); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} className="px-1.5 py-0.5 font-mono text-xs hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" title="Subscript">X₂</button>
+                                
+                                <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+                                
+                                <select 
+                                    onChange={(e) => { document.execCommand('fontSize', false, e.target.value); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }}
+                                    className="bg-slate-700/60 text-[11px] rounded text-slate-200 border border-slate-600/50 px-1 py-1 focus:outline-none"
+                                    title="Font Size"
+                                    defaultValue="3"
+                                >
+                                    <option value="1">Small</option>
+                                    <option value="3">Normal</option>
+                                    <option value="5">Large</option>
+                                    <option value="7">Huge</option>
+                                </select>
+                                
+                                <div className="flex items-center gap-1 ml-auto">
+                                    <label title="Text Color" className="flex items-center justify-center cursor-pointer w-6 h-6 rounded hover:bg-slate-700/60 overflow-hidden relative">
+                                        <div className="absolute bottom-1 w-3 h-1 bg-current" style={{ color: 'white' }}></div>
+                                        <span className="text-[10px] font-bold pb-1">A</span>
+                                        <input 
+                                            type="color" 
+                                            onChange={(e) => { document.execCommand('foreColor', false, e.target.value); editorRef.current?.focus(); setValue(editorRef.current?.innerHTML || ''); }} 
+                                            className="absolute opacity-0 w-full h-full cursor-pointer"
+                                        />
+                                    </label>
+                                    
+                                    <label title="Highlight Color" className="flex items-center justify-center cursor-pointer w-6 h-6 rounded hover:bg-slate-700/60 overflow-hidden relative">
+                                        <Highlighter size={13} className="text-slate-300" />
+                                        <input 
+                                            type="color" 
+                                            onChange={(e) => { 
+                                                // Some browsers use hiliteColor, some use backColor
+                                                document.execCommand('hiliteColor', false, e.target.value) || document.execCommand('backColor', false, e.target.value); 
+                                                editorRef.current?.focus(); 
+                                                setValue(editorRef.current?.innerHTML || ''); 
+                                            }} 
+                                            className="absolute opacity-0 w-full h-full cursor-pointer"
+                                        />
+                                    </label>
+
+                                    <div className="w-[1px] h-4 bg-slate-700 mx-1" />
+
+                                    <button 
+                                        onClick={(e) => { e.preventDefault(); setIsEditorFullscreen(!isEditorFullscreen); }} 
+                                        className="p-1.5 hover:bg-slate-700/60 rounded text-slate-300 hover:text-white" 
+                                        title={isEditorFullscreen ? "Exit Fullscreen" : "Fullscreen Editor"}
+                                    >
+                                        {isEditorFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+                                    </button>
+                                </div>
                             </div>
 
-                            <textarea
-                                ref={textareaRef}
-                                autoFocus
-                                rows={4}
-                                className="w-full p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none font-sans leading-relaxed"
-                                placeholder="Type node content..."
-                                value={value}
-                                onChange={e => setValue(e.target.value)}
+                            <div
+                                ref={editorRef}
+                                contentEditable
+                                onInput={(e) => setValue(e.currentTarget.innerHTML)}
+                                className={`w-full p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 font-sans leading-normal break-words whitespace-pre-wrap overflow-auto code-scroll-container ${isEditorFullscreen ? 'flex-1 min-h-[300px]' : 'min-h-[100px]'}`}
+                                style={isEditorFullscreen ? {} : { maxHeight: '200px' }}
+                                data-placeholder="Type node content..."
                             />
                         </div>
                     )}
@@ -624,7 +821,7 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                                 </button>
                             </div>
 
-                            <div className="flex flex-col gap-1.5 max-h-[220px] overflow-y-auto pr-1">
+                            <div className="flex flex-col gap-1.5 max-h-[220px] overflow-y-auto custom-thin-scrollbar pr-1">
                                 {taskItems.map((item, idx) => (
                                     <div key={item.id} className="flex items-center gap-2 bg-slate-800/60 p-2 rounded-xl border border-slate-700/50 group">
                                         <input
@@ -894,6 +1091,197 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
                                     onChange={e => setCodeContent(e.target.value)}
                                 />
                             </div>
+                        </div>
+                    )}
+
+                    {/* 7. BUTTON MODE */}
+                    {category === 'button' && (
+                        <div className="flex flex-col gap-3 p-1">
+                            <div className="flex flex-col gap-1.5">
+                                <label className="block text-[11px] font-medium text-slate-400">Button Text</label>
+                                <input
+                                    autoFocus
+                                    type="text"
+                                    placeholder="Click me!"
+                                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-pink-500/50 focus:ring-1 focus:ring-pink-500/50"
+                                    value={buttonText}
+                                    onChange={e => setButtonText(e.target.value)}
+                                />
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                                <label className="block text-[11px] font-medium text-slate-400">Target URL</label>
+                                <input
+                                    type="text"
+                                    placeholder="https://example.com"
+                                    className="w-full px-3 py-2 bg-slate-900/50 border border-slate-700/50 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-pink-500/50 focus:ring-1 focus:ring-pink-500/50"
+                                    value={buttonUrl}
+                                    onChange={e => setButtonUrl(e.target.value)}
+                                />
+                            </div>
+                            <div className="grid grid-cols-2 gap-3">
+                                <div className="flex flex-col gap-1.5">
+                                    <label className="block text-[11px] font-medium text-slate-400">Background Color</label>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="color"
+                                            value={buttonStyle.bg}
+                                            onChange={e => setButtonStyle({ ...buttonStyle, bg: e.target.value })}
+                                            className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0 p-0"
+                                        />
+                                        <input
+                                            type="text"
+                                            value={buttonStyle.bg}
+                                            onChange={e => setButtonStyle({ ...buttonStyle, bg: e.target.value })}
+                                            className="flex-1 px-2 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded-lg text-xs text-white"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex flex-col gap-1.5">
+                                    <label className="block text-[11px] font-medium text-slate-400">Text Color</label>
+                                    <div className="flex items-center gap-2">
+                                        <input
+                                            type="color"
+                                            value={buttonStyle.text}
+                                            onChange={e => setButtonStyle({ ...buttonStyle, text: e.target.value })}
+                                            className="w-8 h-8 rounded-lg cursor-pointer bg-transparent border-0 p-0"
+                                        />
+                                        <input
+                                            type="text"
+                                            value={buttonStyle.text}
+                                            onChange={e => setButtonStyle({ ...buttonStyle, text: e.target.value })}
+                                            className="flex-1 px-2 py-1.5 bg-slate-900/50 border border-slate-700/50 rounded-lg text-xs text-white"
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                                <label className="block text-[11px] font-medium text-slate-400">Corner Radius (px)</label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="30"
+                                    value={parseInt(buttonStyle.radius) || 0}
+                                    onChange={e => setButtonStyle({ ...buttonStyle, radius: e.target.value + 'px' })}
+                                    className="w-full accent-pink-500"
+                                />
+                                <div className="text-right text-[10px] text-slate-500">{buttonStyle.radius}</div>
+                            </div>
+                            
+                            {/* Animation Presets Swipe Container */}
+                            <div className="flex flex-col gap-1.5 mt-2">
+                                <label className="block text-[11px] font-medium text-slate-400">Animation Preset</label>
+                                <div 
+                                    ref={animScrollRef}
+                                    className="flex overflow-x-auto gap-2 pb-2 snap-x custom-thin-scrollbar" 
+                                >
+                                    {[
+                                        { id: 'none', label: 'None' },
+                                        { id: 'pulse', label: 'Pulse' },
+                                        { id: 'glow', label: 'Glow' },
+                                        { id: 'float', label: 'Float' },
+                                        { id: 'shake', label: 'Shake' },
+                                        { id: 'heartbeat', label: 'Heartbeat' },
+                                        { id: 'wiggle', label: 'Wiggle' },
+                                        { id: 'rubberband', label: 'Rubber Band' },
+                                        { id: 'flash', label: 'Flash' },
+                                        { id: 'swing', label: 'Swing' },
+                                        { id: 'border-pulse', label: 'Border Pulse' }
+                                    ].map(preset => (
+                                        <button
+                                            key={preset.id}
+                                            onClick={() => setButtonStyle({ ...buttonStyle, animPreset: preset.id })}
+                                            className={`snap-start flex-shrink-0 px-3 py-1.5 rounded-lg text-[10px] font-medium border transition-colors ${buttonStyle.animPreset === preset.id ? 'bg-pink-500/20 border-pink-500/50 text-pink-300' : 'bg-slate-800/50 border-slate-700/50 text-slate-400 hover:bg-slate-700/50'}`}
+                                        >
+                                            {preset.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* Animation Settings (Speed / Color) */}
+                            {buttonStyle.animPreset && buttonStyle.animPreset !== 'none' && (
+                                <div className="grid grid-cols-2 gap-3 p-3 rounded-xl bg-slate-900/40 border border-slate-800">
+                                    <div className="flex flex-col gap-1.5">
+                                        <label className="block text-[10px] font-medium text-slate-400">Animation Speed (s)</label>
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="range"
+                                                min="0.5"
+                                                max="5"
+                                                step="0.1"
+                                                value={buttonStyle.animSpeed || 2}
+                                                onChange={e => setButtonStyle({ ...buttonStyle, animSpeed: parseFloat(e.target.value) })}
+                                                className="flex-1 accent-pink-500"
+                                            />
+                                            <span className="text-[10px] text-slate-300 w-6">{buttonStyle.animSpeed}s</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex flex-col gap-1.5">
+                                        <label className="block text-[10px] font-medium text-slate-400">Effect Color</label>
+                                        <div className="flex items-center gap-2">
+                                            <input
+                                                type="color"
+                                                value={buttonStyle.animColor || '#ffffff'}
+                                                onChange={e => setButtonStyle({ ...buttonStyle, animColor: e.target.value })}
+                                                className="w-6 h-6 rounded cursor-pointer bg-transparent border-0 p-0"
+                                            />
+                                            <span className="text-[10px] text-slate-300 uppercase">{buttonStyle.animColor || '#FFFFFF'}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="mt-2 p-4 rounded-xl border border-slate-700/50 bg-slate-900/30 flex items-center justify-center overflow-hidden">
+                                <button
+                                    style={{
+                                        background: buttonStyle.bg,
+                                        color: buttonStyle.text,
+                                        borderRadius: buttonStyle.radius,
+                                        padding: '8px 20px',
+                                        fontWeight: '600',
+                                        fontSize: '14px',
+                                        boxShadow: '0 4px 6px -1px rgba(0,0,0,0.2)',
+                                        transition: 'transform 0.1s',
+                                        animation: buttonStyle.animPreset && buttonStyle.animPreset !== 'none' ? `btn-${buttonStyle.animPreset} ${buttonStyle.animSpeed || 2}s infinite` : 'none',
+                                        '--btn-anim-color': buttonStyle.animColor || 'rgba(255,255,255,0.8)'
+                                    } as React.CSSProperties}
+                                    onMouseDown={e => e.currentTarget.style.transform = 'scale(0.95)'}
+                                    onMouseUp={e => e.currentTarget.style.transform = 'scale(1)'}
+                                    onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
+                                >
+                                    {buttonText || 'Preview Button'}
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 8. EMBED MODE */}
+                    {category === 'embed' && (
+                        <div className="flex flex-col gap-2 p-1">
+                            <label className="block text-[11px] font-medium text-slate-400">Embed Title (Optional, max 200 chars)</label>
+                            <input
+                                type="text"
+                                placeholder="E.g., Tutorial Video"
+                                value={embedTitle}
+                                onChange={(e) => setEmbedTitle(e.target.value.substring(0, 200))}
+                                className="w-full p-2 bg-slate-900/50 border border-slate-700/50 rounded-lg text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 transition-all"
+                            />
+                            
+                            <label className="block text-[11px] font-medium text-slate-400 mt-2">Embed iframe Code (YouTube, Figma, Maps, etc.)</label>
+                            <textarea
+                                autoFocus
+                                rows={6}
+                                placeholder='<iframe width="560" height="315" src="..." frameborder="0" allowfullscreen></iframe>'
+                                className="w-full p-3 bg-slate-900/50 border border-slate-700/50 rounded-xl text-xs text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/50 font-mono resize-none leading-relaxed"
+                                value={embedCode}
+                                onChange={e => setEmbedCode(e.target.value)}
+                            />
+                            {embedCode && (
+                                <div className="mt-2 p-2 rounded-xl border border-slate-700/50 bg-slate-900/30">
+                                    <div className="text-[10px] text-slate-400 mb-2 font-medium uppercase tracking-wider">Preview</div>
+                                    <div className="w-full aspect-video rounded-lg overflow-hidden border border-white/10 bg-black/50 pointer-events-none" dangerouslySetInnerHTML={{ __html: embedCode }} />
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

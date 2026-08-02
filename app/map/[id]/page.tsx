@@ -88,12 +88,17 @@ export default function MapEditorPage({ params }: { params: Promise<{ id: string
         return () => { isMounted = false; };
     }, [id, resetMapData]);
 
-    const handleSave = async (dataToSave = mapData) => {
+    const handleSave = async (dataToSave?: any) => {
         if (!user) return;
+        
+        // Prevent React click events from being saved instead of the mind map data
+        const isEvent = dataToSave && typeof dataToSave === 'object' && ('nativeEvent' in dataToSave || 'preventDefault' in dataToSave);
+        const actualData = (dataToSave && !isEvent) ? dataToSave : mapData;
+        
         setSaving(true);
         try {
-            await saveMindMap(id, dataToSave);
-            setLastSavedData(dataToSave);
+            await saveMindMap(id, actualData);
+            setLastSavedData(actualData);
             console.log("Saved");
         } catch (error) {
             console.error("Error saving mind map:", error);

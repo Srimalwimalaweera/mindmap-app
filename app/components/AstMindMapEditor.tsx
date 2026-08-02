@@ -48,11 +48,93 @@ function customNodeToINode(node: CustomNode): any {
     };
 }
 
+function htmlToStandardMarkdown(html: string): string {
+    if (!html.includes('<')) return html;
+
+    let md = html;
+
+    // Embed (convert to Code Block)
+    const embedMatch = md.match(/data-category="embed"[^>]*data-embedcode="([^"]*)"/);
+    if (embedMatch) {
+        const code = decodeURIComponent(embedMatch[1]);
+        return `\`\`\`\n${code}\n\`\`\``;
+    }
+
+    // Code
+    const codeNodeMatch = md.match(/data-category="code"[^>]*>[\s\S]*?<pre[^>]*>([\s\S]*?)<\/pre>/);
+    if (codeNodeMatch) {
+        const code = codeNodeMatch[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+        return `\`\`\`\n${code}\n\`\`\``;
+    }
+
+    // Button (div) -> Link
+    const btnDivMatch = md.match(/data-category="button"[^>]*data-url="([^"]*)"[^>]*>([\s\S]*?)<\/(div|a)>/);
+    if (btnDivMatch) {
+        return `[${btnDivMatch[2].replace(/<[^>]+>/g, '').trim()}](${btnDivMatch[1]})`;
+    }
+
+    // Button or Link (a tag) -> Link
+    const aMatch = md.match(/<a href="([^"]*)"[^>]*data-category="(button|link)"[^>]*>.*?<\/svg>([\s\S]*?)<\/a>/);
+    if (aMatch) {
+        return `[${aMatch[3].replace(/<[^>]+>/g, '').trim()}](${aMatch[1]})`;
+    }
+
+    // Checklist
+    if (md.includes('class="checklist"')) {
+        const liRegex = /<li[^>]*>.*?<input type="checkbox"([^>]*)>.*?<span[^>]*>([\s\S]*?)<\/span>.*?<\/li>/g;
+        let match;
+        const items = [];
+        while ((match = liRegex.exec(md)) !== null) {
+            const isChecked = match[1].includes('checked');
+            const text = match[2].replace(/<[^>]+>/g, '').trim();
+            items.push(`${isChecked ? '[x]' : '[ ]'} ${text}`);
+        }
+        if (items.length > 0) return items.join('\n');
+    }
+
+    // Table
+    if (md.includes('<table')) {
+        const trRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
+        let trMatch;
+        const rows = [];
+        while ((trMatch = trRegex.exec(md)) !== null) {
+            const cellRegex = /<(th|td)[^>]*>([\s\S]*?)<\/\1>/g;
+            let cellMatch;
+            const cells = [];
+            let isTh = false;
+            while ((cellMatch = cellRegex.exec(trMatch[1])) !== null) {
+                if (cellMatch[1] === 'th') isTh = true;
+                cells.push(cellMatch[2].replace(/&nbsp;/g, ' ').replace(/<[^>]+>/g, '').trim());
+            }
+            if (cells.length > 0) {
+                rows.push('| ' + cells.join(' | ') + ' |');
+                if (isTh) {
+                    rows.push('|' + cells.map(() => '---').join('|') + '|');
+                }
+            }
+        }
+        if (rows.length > 0) return rows.join('\n');
+    }
+
+    // Image
+    const imgMatch = md.match(/<img[^>]*src="([^"]*)"[^>]*alt="([^"]*)"/);
+    if (imgMatch) {
+        return `![${imgMatch[2]}](${imgMatch[1]})`;
+    }
+
+    // Strip remaining HTML tags for unsupported nodes
+    return md.replace(/<br\s*\/?>/g, '\n').replace(/&nbsp;/g, ' ').replace(/<[^>]+>/g, '').trim() || md;
+}
+
 function customNodeToMarkdown(node: CustomNode, depth: number = 0): string {
     const indent = '  '.repeat(Math.max(0, depth - 1));
     const prefix = depth === 0 ? '# ' : `${indent}- `;
     
-    const contentStr = typeof node.content === 'string' ? node.content : String(node.content || '');
+    let contentStr = typeof node.content === 'string' ? node.content : String(node.content || '');
+
+    // Convert HTML payloads to pure markdown
+    contentStr = htmlToStandardMarkdown(contentStr);
+
     const lines = contentStr.split('\n');
     const continuationIndent = depth === 0 ? '' : indent + '  ';
     const formattedContent = lines.map((line, idx) => idx === 0 ? `${prefix}${line}` : `${continuationIndent}${line}`).join('\n');
@@ -60,6 +142,23 @@ function customNodeToMarkdown(node: CustomNode, depth: number = 0): string {
     let md = formattedContent + '\n';
     for (const child of node.children) {
         md += customNodeToMarkdown(child, depth + 1);
+    }
+    return md;
+}
+
+function customNodeToMarkdownWithHtml(node: CustomNode, depth: number = 0): string {
+    const indent = '  '.repeat(Math.max(0, depth - 1));
+    const prefix = depth === 0 ? '# ' : `${indent}- `;
+    
+    let contentStr = typeof node.content === 'string' ? node.content : String(node.content || '');
+
+    const lines = contentStr.split('\n');
+    const continuationIndent = depth === 0 ? '' : indent + '  ';
+    const formattedContent = lines.map((line, idx) => idx === 0 ? `${prefix}${line}` : `${continuationIndent}${line}`).join('\n');
+    
+    let md = formattedContent + '\n';
+    for (const child of node.children) {
+        md += customNodeToMarkdownWithHtml(child, depth + 1);
     }
     return md;
 }
@@ -137,12 +236,33 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
     // Refs for Gestures
     const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const [longPressProgress, setLongPressProgress] = useState<{ x: number, y: number } | null>(null);
+    const holdTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const animationTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const holdStartPos = useRef<{ x: number, y: number, clientX: number, clientY: number } | null>(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const holdNodeInfo = useRef<{ nodeId: string, payload: any } | null>(null);
+    const longPressHandledRef = useRef<boolean>(false);
+    const contextMenuOpenedAtRef = useRef<number>(0);
+
+    const handleBackgroundClick = () => {
+        if (Date.now() - contextMenuOpenedAtRef.current < 500) return;
+        setContextMenu(null);
+        setButtonContextMenu(null);
+        setEmbedContextMenu(null);
+        setEmbedSidePanel(null);
+    };
 
     const [viewMode, setViewMode] = useState<ViewMode>('visual');
     const [fullscreenCode, setFullscreenCode] = useState<string | null>(null);
+    const [fullscreenEmbed, setFullscreenEmbed] = useState<string | null>(null);
     const [fullscreenMedia, setFullscreenMedia] = useState<{ src: string; type: 'image' | 'video' } | null>(null);
     const [fullscreenZoom, setFullscreenZoom] = useState(1);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    
+    const [buttonContextMenu, setButtonContextMenu] = useState<{ x: number; y: number; nodeId: string; url: string; exactContent: string; isGhost: boolean } | null>(null);
+    const [embedContextMenu, setEmbedContextMenu] = useState<{ x: number; y: number; nodeId: string; embedCode: string; exactContent: string; isGhost: boolean } | null>(null);
+    const [embedSidePanel, setEmbedSidePanel] = useState<{ x: number; y: number; height: number; nodeId: string; embedCode: string; exactContent: string; isGhost: boolean } | null>(null);
 
     // Onboarding State
     const [showOnboarding, setShowOnboarding] = useState(false);
@@ -252,6 +372,9 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                         zoom: true,
                         pan: true,
                     });
+                    
+                    // Disable double-click to zoom so that double-tap to edit works on mobile
+                    d3.select(svgElement).on('dblclick.zoom', null);
 
                     // 2. Load Data
                     if (mapData) {
@@ -375,10 +498,14 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                     const svg = d3.select(svgElement);
 
                     // Remove any existing click handlers to prevent duplicates
-                    svg.on('click', null); // Clear prev
-                    svg.on('contextmenu', null);
-
+                    svg.on('click', null); 
                     svg.on('click', function (event) {
+                        if (longPressHandledRef.current) {
+                            longPressHandledRef.current = false;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            return;
+                        }
                         dismissOnboarding(); // Dismiss on any click
                         const target = event.target as HTMLElement;
 
@@ -492,6 +619,18 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                             return;
                         }
 
+                        // EMBED FULLSCREEN BUTTON
+                        const embedFsBtn = target.closest('.embed-fullscreen-btn') as HTMLElement;
+                        if (embedFsBtn) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const encodedEmbed = embedFsBtn.getAttribute('data-code');
+                            if (encodedEmbed) {
+                                setFullscreenEmbed(decodeURIComponent(encodedEmbed));
+                            }
+                            return;
+                        }
+
                         // A. Check for Ghost Node Click
                         const ghostPlaceholder = target.closest('.ghost-node-placeholder');
                         if (ghostPlaceholder) {
@@ -537,18 +676,67 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                     event.stopPropagation();
 
                                     // --- GESTURE LOGIC ---
+                                    const wrapper = wrapperRef.current;
+                                    const wrapperRect = wrapper.getBoundingClientRect();
+                                    const rect = textEl.getBoundingClientRect();
+                                    const nodeId = dataNode.payload?.id || dataNode.id || 'unknown';
+
+                                    // Handle Embed Side Panel Button Click (Single Click, Immediate)
+                                    if (target.closest('.embed-side-panel-btn')) {
+                                        if (clickTimerRef.current) {
+                                            clearTimeout(clickTimerRef.current);
+                                            clickTimerRef.current = null;
+                                        }
+                                        const exactContent = dataNode.payload?.fullContent || dataNode.content;
+                                        const embedMatch = exactContent?.match(/data-embedcode="([^"]*)"/);
+                                        const embedCode = embedMatch ? decodeURIComponent(embedMatch[1]) : '';
+                                        setEmbedSidePanel({
+                                            nodeId,
+                                            x: rect.right - wrapperRect.left - 180, // 180px is the menu width (open inside)
+                                            y: rect.top - wrapperRect.top,
+                                            height: rect.height,
+                                            embedCode,
+                                            exactContent,
+                                            isGhost: dataNode.isGhost || false
+                                        });
+                                        return;
+                                    }
+
                                     if (clickTimerRef.current) {
                                         // DOUBLE CLICK detected -> EDIT
                                         clearTimeout(clickTimerRef.current);
                                         clickTimerRef.current = null;
 
-                                        const wrapper = wrapperRef.current;
-                                        const wrapperRect = wrapper.getBoundingClientRect();
-                                        const rect = textEl.getBoundingClientRect();
-                                        const nodeId = dataNode.payload?.id || dataNode.id || 'unknown';
-
                                         // AST driven extraction
                                         const exactContent = dataNode.payload?.fullContent || dataNode.content;
+                                        
+                                        if (exactContent?.includes('data-category="button"')) {
+                                            const urlMatch = exactContent.match(/data-url="([^"]*)"/);
+                                            const url = urlMatch ? urlMatch[1] : '';
+                                            setButtonContextMenu({
+                                                nodeId,
+                                                x: rect.left - wrapperRect.left + (rect.width / 2),
+                                                y: rect.top - wrapperRect.top + (rect.height / 2),
+                                                url,
+                                                exactContent,
+                                                isGhost: dataNode.isGhost || false
+                                            });
+                                            return;
+                                        }
+                                        
+                                        if (exactContent?.includes('data-category="embed"')) {
+                                            const embedMatch = exactContent.match(/data-embedcode="([^"]*)"/);
+                                            const embedCode = embedMatch ? decodeURIComponent(embedMatch[1]) : '';
+                                            setEmbedContextMenu({
+                                                nodeId,
+                                                x: rect.left - wrapperRect.left + (rect.width / 2),
+                                                y: rect.top - wrapperRect.top + (rect.height / 2),
+                                                embedCode,
+                                                exactContent,
+                                                isGhost: dataNode.isGhost || false
+                                            });
+                                            return;
+                                        }
 
                                         setEditing({
                                             id: nodeId,
@@ -563,6 +751,11 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                         // SINGLE CLICK detected -> EXPAND (Delayed)
                                         clickTimerRef.current = setTimeout(() => {
                                             clickTimerRef.current = null;
+                                            
+                                            // Ignore if click was inside an embed's interactive area
+                                            if (target.closest('.embed-content-area')) {
+                                                return;
+                                            }
 
                                             // Toggle Expansion logic
                                             const nodeId = dataNode.payload?.id;
@@ -586,7 +779,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                                     }
                                                 }
                                             }
-                                        }, 250);
+                                        }, 400);
                                     }
                                 }
                             }
@@ -598,9 +791,82 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                         // unless we specifically want to cancel.
                         // But clicking background IS a "blur" event usually.
 
-                        setContextMenu(null);
+                        handleBackgroundClick();
                         setDownloadMenuOpen(false);
                     });
+
+                    // Custom Long Press Logic (Pointer Events)
+                    const clearHold = () => {
+                        if (holdTimerRef.current) clearTimeout(holdTimerRef.current);
+                        if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
+                        holdTimerRef.current = null;
+                        animationTimerRef.current = null;
+                        holdStartPos.current = null;
+                        setLongPressProgress(null);
+                    };
+
+                    svg.on('pointerdown', function (event: PointerEvent) {
+                        longPressHandledRef.current = false;
+                        if (event.pointerType !== 'touch' && event.button !== 0) return;
+                        const target = event.target as Element;
+                        const textEl = target.closest('text, foreignObject');
+                        if (textEl && wrapperRef.current) {
+                            const nodeGroup = target.closest('g.markmap-node');
+                            if (nodeGroup) {
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                const d = d3.select(nodeGroup).datum() as any;
+                                const dataNode = d?.data || d;
+                                const nodeId = dataNode.payload?.id || dataNode.id || 'unknown';
+                                
+                                const [bx, by] = d3.pointer(event, wrapperRef.current);
+                                holdStartPos.current = { x: bx, y: by, clientX: event.clientX, clientY: event.clientY };
+                                holdNodeInfo.current = { nodeId, payload: dataNode.payload || {} };
+                                
+                                // Delay the animation by 200ms to avoid flashes on short taps
+                                animationTimerRef.current = setTimeout(() => {
+                                    setLongPressProgress({ x: bx, y: by });
+                                }, 200);
+                                
+                                holdTimerRef.current = setTimeout(() => {
+                                    if (holdStartPos.current) {
+                                        let adjustedX = holdStartPos.current.x;
+                                        let adjustedY = holdStartPos.current.y;
+                                        const menuWidth = 200;
+                                        const menuHeight = 280;
+                                        if (holdStartPos.current.clientX + menuWidth > window.innerWidth) adjustedX -= menuWidth;
+                                        if (holdStartPos.current.clientY + menuHeight > window.innerHeight) adjustedY -= menuHeight;
+                                        
+                                        contextMenuOpenedAtRef.current = Date.now();
+                                        setContextMenu({
+                                            x: adjustedX,
+                                            y: adjustedY,
+                                            nodeId: holdNodeInfo.current!.nodeId,
+                                            payload: holdNodeInfo.current!.payload
+                                        });
+                                        
+                                        longPressHandledRef.current = true;
+                                        clearHold();
+                                        
+                                        // Vibrate if supported
+                                        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+                                            navigator.vibrate(50);
+                                        }
+                                    }
+                                }, 600);
+                            }
+                        }
+                    });
+
+                    svg.on('pointermove', function (event: PointerEvent) {
+                        if (holdStartPos.current) {
+                            const dx = event.clientX - holdStartPos.current.clientX;
+                            const dy = event.clientY - holdStartPos.current.clientY;
+                            if (Math.abs(dx) > 10 || Math.abs(dy) > 10) clearHold();
+                        }
+                    });
+
+                    svg.on('pointerup', clearHold);
+                    svg.on('pointercancel', clearHold);
 
                     // D. Context Menu (Right Click)
                     svg.on('contextmenu', function (event) {
@@ -618,9 +884,22 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                 const nodeId = dataNode.payload?.id || dataNode.id || 'unknown';
 
                                 const [bx, by] = d3.pointer(event, wrapperRef.current);
+                                
+                                const menuWidth = 200;
+                                const menuHeight = 280;
+                                let adjustedX = bx;
+                                let adjustedY = by;
+                                
+                                if (event.clientX + menuWidth > window.innerWidth) {
+                                    adjustedX = bx - menuWidth;
+                                }
+                                if (event.clientY + menuHeight > window.innerHeight) {
+                                    adjustedY = by - menuHeight;
+                                }
+
                                 setContextMenu({
-                                    x: bx,
-                                    y: by,
+                                    x: adjustedX,
+                                    y: adjustedY,
                                     nodeId: nodeId,
                                     payload: dataNode.payload || {}
                                 });
@@ -1082,21 +1361,15 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
         let svgData = new XMLSerializer().serializeToString(svgRef.current);
 
-        // Inject styles for Dark Theme (App Theme)
-        // Background: #1e1e2e (Dark Purple/Blue)
-        // Text: White
-
-        const styleBlock = '<style>text { fill: white !important; } .markmap-node > path { fill: none; stroke: white !important; }</style>';
+        // Inject styles for Premium Dark Theme (App Theme)
+        const styleBlock = '<style>text { fill: white !important; font-family: system-ui, -apple-system, sans-serif; } .markmap-node > path { fill: none; stroke: rgba(255,255,255,0.4) !important; }</style>';
 
         // Prepend a background rectangle
-        // We need to get the width/height to make the rect cover the whole area
-        // If not explicit, we use 100%
         const bgRect = '<rect width="100%" height="100%" fill="#1e1e2e"></rect>';
 
         // Insert styleblock
         svgData = svgData.replace(/>/, `>${styleBlock}`);
-        // Insert background rect immediately after (so it's behind everything)
-        // Note: SVG order matters, first child is back-most.
+        // Insert background rect immediately after
         svgData = svgData.replace(/>/, `>${bgRect}`);
 
         const blob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
@@ -1114,7 +1387,129 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
     const handleDownloadHTML = async () => {
         await prepareDownload();
 
-        const mdText = customNodeToMarkdown(mapData);
+        // 1. Create INode tree directly from mapData
+        const root = customNodeToINode(mapData);
+
+        // 2. Apply Visual Mode Transformations (processNodeForExport)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const processNodeForExport = (node: any) => {
+            if (node.content && (node.content.includes(GHOST_SYMBOL) || node.content.includes('[[ADD_NEW]]'))) {
+                node.content = '<span class="ghost-node-placeholder" style="color: #9ca3af; font-style: italic;">+ Click to add</span>';
+                node.isGhost = true;
+            } else if (node.content) {
+                // Link Handling
+                node.content = node.content.replace(/<a\s+(?:[^>]*?\s+)?href=(["'])(.*?)\1/g, '<a href="$2" target="_blank"');
+
+                // Code Blocks
+                const codeBlockRegex = /```(\w*)\n([\s\S]*?)```/g;
+                node.content = node.content.replace(codeBlockRegex, (match: string, lang: string, code: string) => {
+                    return `
+                    <div class="code-node-container" style="background:#1e1e2e; border:1px solid rgba(255,255,255,0.1); border-radius:8px; overflow:hidden; font-family:monospace; font-size:12px; margin-top:4px; max-width: 400px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);">
+                        <div style="background:rgba(0,0,0,0.3); padding:4px 8px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05);">
+                            <span style="color:rgba(255,255,255,0.5); font-size:10px;">${lang || 'CODE'}</span>
+                        </div>
+                        <div style="max-height: 250px; overflow-y: auto; padding:8px;">
+                            <pre style="margin:0; color:#e2e8f0; white-space:pre-wrap; word-wrap:break-word;">${code.trim()}</pre>
+                        </div>
+                    </div>`;
+                });
+
+                // Media Handling (Images)
+                const imgRegex = /!\[(.*?)\]\((.*?)\)(?:<!--(.*?)-->)?/g;
+                node.content = node.content.replace(imgRegex, (match: string, alt: string, url: string, comment: string) => {
+                    let renderWidth = 200;
+                    let renderHeight = 120;
+                    if (comment) {
+                        const widthMatch = comment.match(/width=(\d+)/);
+                        const heightMatch = comment.match(/height=(\d+)/);
+                        if (widthMatch && heightMatch) {
+                            const origWidth = parseInt(widthMatch[1]);
+                            const origHeight = parseInt(heightMatch[1]);
+                            const maxWidth = 224;
+                            const maxHeight = 224;
+                            renderWidth = origWidth;
+                            renderHeight = origHeight;
+                            if (renderWidth > maxWidth) {
+                                renderHeight = renderHeight * (maxWidth / renderWidth);
+                                renderWidth = maxWidth;
+                            }
+                            if (renderHeight > maxHeight) {
+                                renderWidth = renderWidth * (maxHeight / renderHeight);
+                                renderHeight = maxHeight;
+                            }
+                        }
+                    }
+                    return `<div class="media-placeholder-container image-node" style="display:inline-block; position:relative; width:${Math.round(renderWidth)}px; height:${Math.round(renderHeight)}px; border-radius:8px; overflow:hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);">
+                        <div style="position:absolute; inset:0; background-image:url('${url}'); background-size:cover; background-position:center; filter:blur(10px); opacity:0.6;"></div>
+                        <div style="position:absolute; inset:0; background:rgba(0,0,0,0.4); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
+                            <span style="font-size:24px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">🖼️</span>
+                            <button class="load-media-btn" onclick="window.loadMedia(this, 'img', '${url}')" style="padding:6px 16px; font-size:12px; font-weight:600; cursor:pointer; background:rgba(255,255,255,0.2); backdrop-filter:blur(4px); color:white; border:1px solid rgba(255,255,255,0.4); border-radius:20px; transition:all 0.2s; box-shadow:0 4px 6px rgba(0,0,0,0.3);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">Load Image</button>
+                            <div class="offline-msg hidden" style="color:#ef4444; font-size:10px; font-weight:600; background:rgba(239,68,68,0.1); padding:4px 8px; border-radius:4px; margin-top:4px;">No internet connection</div>
+                        </div>
+                    </div>`;
+                });
+
+                // Media Handling (Videos)
+                const videoRegex = /<video[^>]*src=["'](.*?)["'][^>]*>.*?<\/video>/g;
+                node.content = node.content.replace(videoRegex, (match: string, url: string) => {
+                    const widthMatch = match.match(/width=["'](\d+)["']/);
+                    const heightMatch = match.match(/height=["'](\d+)["']/);
+                    let renderWidth = 220;
+                    let renderHeight = 130;
+                    if (widthMatch && heightMatch) {
+                        const origWidth = parseInt(widthMatch[1]);
+                        const origHeight = parseInt(heightMatch[1]);
+                        const maxWidth = 224;
+                        const maxHeight = 224;
+                        renderWidth = origWidth;
+                        renderHeight = origHeight;
+                        if (renderWidth > maxWidth) {
+                            renderHeight = renderHeight * (maxWidth / renderWidth);
+                            renderWidth = maxWidth;
+                        }
+                        if (renderHeight > maxHeight) {
+                            renderWidth = renderWidth * (maxHeight / renderHeight);
+                            renderHeight = maxHeight;
+                        }
+                    }
+                    return `<div class="media-placeholder-container video-node" style="display:inline-block; position:relative; width:${Math.round(renderWidth)}px; height:${Math.round(renderHeight)}px; border-radius:8px; overflow:hidden; background:linear-gradient(135deg, #1e1e2e, #2d2b42); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.1);">
+                        <div style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
+                            <div style="width:40px; height:40px; border-radius:50%; background:rgba(139, 92, 246, 0.2); display:flex; align-items:center; justify-content:center; border:1px solid rgba(139, 92, 246, 0.5);">
+                                <span style="font-size:20px;">🎥</span>
+                            </div>
+                            <button class="load-media-btn" onclick="window.loadMedia(this, 'video', '${url}')" style="padding:6px 16px; font-size:12px; font-weight:600; cursor:pointer; background:rgba(139, 92, 246, 0.8); color:white; border:none; border-radius:20px; transition:all 0.2s; box-shadow:0 4px 6px rgba(0,0,0,0.3);" onmouseover="this.style.background='rgba(139, 92, 246, 1)'" onmouseout="this.style.background='rgba(139, 92, 246, 0.8)'">Play Video</button>
+                            <div class="offline-msg hidden" style="color:#ef4444; font-size:10px; font-weight:600; background:rgba(239,68,68,0.1); padding:4px 8px; border-radius:4px; margin-top:4px;">No internet connection</div>
+                        </div>
+                    </div>`;
+                });
+
+                // Checkboxes
+                node.content = node.content.replace(/- \[( |x)\]/g, (match: string, checkState: string) => {
+                    const isChecked = checkState === 'x';
+                    return `<input type="checkbox" ${isChecked ? 'checked' : ''} onclick="return false;" style="cursor: default; pointer-events: none; margin-right: 4px; vertical-align: middle;">`;
+                });
+
+                // Embed logic overrides (so the button works)
+                if (node.content.includes('class="embed-content-area"')) {
+                    const embedMatch = node.content.match(/data-embedcode="([^"]*)"/);
+                    if (embedMatch) {
+                        const encodedHtml = embedMatch[1];
+                        // Replace the entire .embed-content-area div with our placeholder
+                        node.content = node.content.replace(/<div class="embed-content-area".*?<\/div>\s*<\/div>/, (match) => {
+                            return `<div class="embed-content-area" style="width: 100%; height: 100%; min-height: 150px; pointer-events: auto; overflow: hidden; position: relative; background: rgba(0,0,0,0.4); display:flex; flex-direction:column; align-items:center; justify-content:center;">
+                                <span style="font-size:24px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">🔗</span>
+                                <button class="load-media-btn" onclick="window.loadEmbed(this, '${encodedHtml}')" style="margin-top:8px; padding:6px 16px; font-size:12px; font-weight:600; cursor:pointer; background:rgba(255,255,255,0.2); backdrop-filter:blur(4px); color:white; border:1px solid rgba(255,255,255,0.4); border-radius:20px; transition:all 0.2s; box-shadow:0 4px 6px rgba(0,0,0,0.3);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">Load Embed</button>
+                                <div class="offline-msg hidden" style="color:#ef4444; font-size:10px; font-weight:600; background:rgba(239,68,68,0.1); padding:4px 8px; border-radius:4px; margin-top:4px;">No internet connection</div>
+                            </div></div>`; // Close the parent container
+                        });
+                    }
+                }
+            }
+            if (node.children) node.children.forEach(processNodeForExport);
+        };
+        
+        processNodeForExport(root);
+        const jsonAst = JSON.stringify(root);
 
         const htmlContent = `<!DOCTYPE html>
 <html lang="en">
@@ -1123,50 +1518,165 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Mind Map Export</title>
     <style>
+        :root {
+            --bg-color: #0f172a;
+            --text-color: #f8fafc;
+            --path-color: rgba(255, 255, 255, 0.3);
+            --panel-bg: rgba(255, 255, 255, 0.08);
+            --panel-border: rgba(255, 255, 255, 0.15);
+            --btn-hover: rgba(255, 255, 255, 0.2);
+            --banner-bg: rgba(59, 130, 246, 0.15);
+            --banner-border: rgba(59, 130, 246, 0.3);
+            --banner-text: #93c5fd;
+            --table-border: rgba(255, 255, 255, 0.15);
+            --table-bg: rgba(255, 255, 255, 0.02);
+            --table-header: rgba(255, 255, 255, 0.05);
+        }
+
+        body.light-mode {
+            --bg-color: #f8fafc;
+            --text-color: #0f172a;
+            --path-color: rgba(0, 0, 0, 0.25);
+            --panel-bg: rgba(0, 0, 0, 0.05);
+            --panel-border: rgba(0, 0, 0, 0.1);
+            --btn-hover: rgba(0, 0, 0, 0.12);
+            --banner-bg: rgba(59, 130, 246, 0.1);
+            --banner-border: rgba(59, 130, 246, 0.2);
+            --banner-text: #1d4ed8;
+            --table-border: rgba(0, 0, 0, 0.15);
+            --table-bg: rgba(0, 0, 0, 0.02);
+            --table-header: rgba(0, 0, 0, 0.06);
+        }
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        /* White Background, Black Text */
-        body { margin: 0; padding: 0; overflow: hidden; background-color: #ffffff; color: #000; font-family: sans-serif; }
+        body { 
+            overflow: hidden; 
+            background-color: var(--bg-color); 
+            color: var(--text-color); 
+            font-family: system-ui, -apple-system, sans-serif;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
         #app { width: 100vw; height: 100vh; display: flex; flex-direction: column; }
         #svg-container { flex: 1; width: 100%; height: 100%; position: relative; }
         svg { width: 100%; height: 100%; }
         
-        /* Enforce Black Text for HTML Viewer (White Mode) */
-        .markmap-node text { fill: black !important; }
-        /* Ensure paths/lines are visible against white */
-        .markmap-node > path { stroke: #555 !important; }
+        .markmap-node text { fill: var(--text-color) !important; font-weight: 500; transition: fill 0.3s ease; }
+        .markmap-node > path { stroke: var(--path-color) !important; transition: stroke 0.3s ease; }
         
+        /* Tables */
+        .markmap-node table { border-collapse: collapse; margin-top: 8px; border-radius: 6px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .markmap-node th, .markmap-node td { border: 1px solid var(--table-border); padding: 6px 12px; background: var(--table-bg); color: var(--text-color); }
+        .markmap-node th { background: var(--table-header); font-weight: 600; }
+
+        /* Media Placeholders */
+        .media-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px dashed var(--path-color);
+            border-radius: 8px;
+            padding: 16px;
+            min-width: 150px;
+            min-height: 100px;
+            gap: 8px;
+        }
+        .light-mode .media-placeholder { background: rgba(0, 0, 0, 0.05); }
+        .placeholder-icon { font-size: 24px; opacity: 0.8; }
+        .load-btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .load-btn:hover { background: #2563eb; transform: translateY(-1px); }
+        .offline-msg { color: #ef4444; font-size: 10px; font-weight: 600; background: rgba(239,68,68,0.1); padding: 4px 8px; border-radius: 4px; }
+        
+        /* Notice Banner */
+        .notice-banner {
+            position: fixed;
+            top: 16px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--banner-bg);
+            border: 1px solid var(--banner-border);
+            color: var(--banner-text);
+            padding: 6px 14px;
+            border-radius: 30px;
+            font-size: 11px;
+            font-weight: 500;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            z-index: 1000;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .notice-banner.hidden { opacity: 0; transform: translate(-50%, -20px); pointer-events: none; }
+        .close-banner { background: transparent; border: none; color: inherit; cursor: pointer; padding: 2px; display: flex; align-items: center; justify-content: center; border-radius: 50%; opacity: 0.7; transition: opacity 0.2s; }
+        .close-banner:hover { opacity: 1; background: rgba(0,0,0,0.05); }
+
+        /* Floating Controls */
         .controls {
             position: fixed;
-            bottom: 20px;
-            right: 20px;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%);
             display: flex;
-            gap: 10px;
-            background: rgba(0, 0, 0, 0.1);
-            backdrop-filter: blur(10px);
-            padding: 8px;
+            align-items: center;
+            gap: 6px;
+            background: var(--panel-bg);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            padding: 6px 12px;
             border-radius: 50px;
-            border: 1px solid rgba(0, 0, 0, 0.1);
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 1px solid var(--panel-border);
+            box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+            z-index: 1000;
         }
         
-        button {
+        .controls button, .controls a {
             background: transparent;
             border: none;
-            color: #333;
+            color: var(--text-color);
             cursor: pointer;
-            padding: 8px;
+            padding: 6px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            transition: background 0.2s;
+            transition: all 0.2s;
+            text-decoration: none;
         }
         
-        button:hover {
-            background: rgba(0, 0, 0, 0.1);
-            color: #000;
+        .controls button:hover, .controls a:hover {
+            background: var(--btn-hover);
+            transform: scale(1.05);
         }
 
+        .web-link {
+            font-size: 11px;
+            font-weight: 600;
+            padding: 6px 12px !important;
+            border-radius: 20px !important;
+            background: rgba(59, 130, 246, 0.2) !important;
+            color: #60a5fa !important;
+            border: 1px solid rgba(59, 130, 246, 0.3) !important;
+            gap: 6px;
+        }
+        .light-mode .web-link { color: #2563eb !important; }
+        .web-link:hover { background: rgba(59, 130, 246, 0.3) !important; }
+
+        .divider { width: 1px; height: 20px; background: var(--panel-border); margin: 0 6px; }
         .hidden { display: none !important; }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
@@ -1175,30 +1685,46 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 </head>
 <body>
     <div id="app">
+        <!-- Notice Banner -->
+        <div class="notice-banner" id="banner">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            Internet connection is required to load external images, videos, and embeds.
+            <button class="close-banner" onclick="document.getElementById('banner').classList.add('hidden')">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+
         <div id="svg-container">
             <svg id="mindmap"></svg>
         </div>
         
         <div class="controls">
+            <a href="https://visual-mindmap-app.pages.dev/" target="_blank" class="web-link" title="Open Visual Mind Map Web">
+                <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                Visual Mind Map
+            </a>
+            <div class="divider"></div>
              <button onclick="handleZoomOut()" title="Zoom Out">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
             </button>
             <button onclick="handleFit()" title="Fit to Screen">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
             </button> 
             <button onclick="handleZoomIn()" title="Zoom In">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>
+            </button>
+            <div class="divider"></div>
+            <button onclick="toggleTheme()" title="Toggle Theme" id="theme-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
             </button>
             <button onclick="toggleFullscreen()" title="Fullscreen">
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/></svg>
             </button>
         </div>
     </div>
 
     <script>
-        const markdown = \`\` + decodeURIComponent("` + encodeURIComponent(mdText) + `");
-        const transformer = new markmap.Transformer();
-        const { root } = transformer.transform(markdown);
+        const root = JSON.parse(decodeURIComponent("` + encodeURIComponent(jsonAst) + `"));
         let mm;
 
         function init() {
@@ -1209,9 +1735,53 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
             }, root);
         }
 
+        window.loadMedia = function(btn, type, src) {
+            if (!navigator.onLine) {
+                const msg = btn.nextElementSibling;
+                msg.classList.remove('hidden');
+                setTimeout(() => msg.classList.add('hidden'), 3000);
+                return;
+            }
+            const wrapper = btn.closest('.media-placeholder-container');
+            if (type === 'img') {
+                wrapper.innerHTML = \`
+                    <div style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
+                        <img src="\${src}" style="width:100%; height:100%; object-fit:contain; display:block;" />
+                    </div>\`;
+            } else {
+                wrapper.innerHTML = \`
+                    <div class="media-video-container" style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
+                        <video src="\${src}" controls autoplay style="width:100%; height:100%; object-fit:contain; display:block;"></video>
+                    </div>\`;
+            }
+        };
+
+        window.loadEmbed = function(btn, encodedHtml) {
+            if (!navigator.onLine) {
+                const msg = btn.nextElementSibling;
+                msg.classList.remove('hidden');
+                setTimeout(() => msg.classList.add('hidden'), 3000);
+                return;
+            }
+            const embedArea = btn.closest('.embed-content-area');
+            embedArea.innerHTML = decodeURIComponent(encodedHtml);
+        };
+
         function handleZoomIn() { mm.rescale(1.2); }
         function handleZoomOut() { mm.rescale(0.8); }
         function handleFit() { mm.fit(); }
+        
+        function toggleTheme() {
+            document.body.classList.toggle('light-mode');
+            const isLight = document.body.classList.contains('light-mode');
+            const btn = document.getElementById('theme-btn');
+            if (isLight) {
+                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>';
+            } else {
+                btn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
+            }
+        }
+
         function toggleFullscreen() {
              if (!document.fullscreenElement) {
                 document.documentElement.requestFullscreen();
@@ -1222,7 +1792,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
             }
         }
 
-        init();
+        setTimeout(init, 100);
     </script>
 </body>
 </html>`;
@@ -1274,7 +1844,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
     const videoLimitBytes = userPlan === 'ultra' ? 150 * 1024 * 1024 : 0;
 
     return (
-        <div ref={wrapperRef} onClick={() => setContextMenu(null)} className="w-full h-full relative overflow-hidden bg-transparent group select-none text-white">
+        <div ref={wrapperRef} onClick={() => handleBackgroundClick()} onContextMenu={(e) => e.preventDefault()} className="w-full h-full relative overflow-hidden bg-transparent group select-none text-white">
             
             {/* Quota Display */}
             {userPlan !== 'free' && (
@@ -1337,13 +1907,41 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                             </div>
                         </div>
                     )}
+                    {/* Long Press Indicator */}
+                    {longPressProgress && (
+                        <div
+                            className="loader"
+                            style={{
+                                left: longPressProgress.x,
+                                top: longPressProgress.y,
+                            }}
+                        >
+                            <div className="inner one"></div>
+                            <div className="inner two"></div>
+                            <div className="inner three"></div>
+                        </div>
+                    )}
 
                     {/* Context Menu */}
-                    {contextMenu && (() => {
-                        const isRootNode = contextMenu.nodeId === mapData.id;
+                    {contextMenu && (
+                        <>
+                            <div 
+                                className="fixed inset-0 z-[9999]"
+                                onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleBackgroundClick();
+                                }}
+                                onContextMenu={(e) => {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    handleBackgroundClick();
+                                }}
+                            />
+                            {(() => {
+                                const isRootNode = contextMenu.nodeId === mapData.id;
 
-                        return (
-                            <div
+                                return (
+                                    <div
                                 style={{
                                     position: 'absolute',
                                     left: contextMenu.x,
@@ -1367,7 +1965,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                         });
                                         setContextMenu(null);
                                     }}
-                                    className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center justify-between group transition-colors"
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center justify-between group transition-colors"
                                 >
                                     <span className="flex items-center gap-2">
                                         <span className="p-1 rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
@@ -1396,7 +1994,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                                 });
                                                 setContextMenu(null);
                                             }}
-                                            className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center justify-between group transition-colors"
+                                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center justify-between group transition-colors"
                                         >
                                             <span className="flex items-center gap-2">
                                                 <span className="p-1 rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
@@ -1422,7 +2020,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                                 });
                                                 setContextMenu(null);
                                             }}
-                                            className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-purple-600/20 text-purple-300 hover:text-white flex items-center justify-between group transition-colors"
+                                            className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-purple-600/20 text-purple-300 hover:text-white flex items-center justify-between group transition-colors"
                                         >
                                             <span className="flex items-center gap-2">
                                                 <span className="p-1 rounded-lg bg-purple-500/20 text-purple-400 group-hover:bg-purple-500 group-hover:text-white transition-colors">
@@ -1439,7 +2037,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
                                 <button
                                     onClick={handleEditFromContext}
-                                    className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
                                 >
                                     <span className="p-1 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
@@ -1449,7 +2047,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
                                 <button
                                     onClick={handleDelete}
-                                    className="w-full text-left px-3 py-2 text-xs font-medium rounded-xl hover:bg-rose-600/20 text-rose-300 hover:text-rose-200 flex items-center gap-2 group transition-colors"
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-rose-600/20 text-rose-300 hover:text-rose-200 flex items-center gap-2 group transition-colors"
                                 >
                                     <span className="p-1 rounded-lg bg-rose-500/20 text-rose-400 group-hover:bg-rose-500 group-hover:text-white transition-colors">
                                         <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
@@ -1457,6 +2055,281 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                     Delete Node
                                 </button>
                             </div>
+                        );
+                    })()}
+                    </>
+                    )}
+
+                    {/* Button Double Click Context Menu */}
+                    {buttonContextMenu && (
+                        <>
+                            <div className="fixed inset-0 z-[9997]" onClick={() => setButtonContextMenu(null)} />
+                            <div
+                                className="absolute z-[9998] bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 shadow-2xl rounded-2xl p-2 w-[180px] sm:w-[220px] flex flex-col gap-1 context-menu-enter"
+                                style={{
+                                    left: buttonContextMenu.x,
+                                    top: buttonContextMenu.y,
+                                    transform: 'translate(-50%, -50%)'
+                                }}
+                            >
+                                <button
+                                    onClick={() => {
+                                        window.open(buttonContextMenu.url, '_blank');
+                                        setButtonContextMenu(null);
+                                    }}
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                >
+                                    <span className="p-1 rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                    </span>
+                                    Click Button
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setEditing({
+                                            id: buttonContextMenu.nodeId,
+                                            x: buttonContextMenu.x,
+                                            y: buttonContextMenu.y,
+                                            text: buttonContextMenu.exactContent,
+                                            isGhost: buttonContextMenu.isGhost,
+                                            mode: 'input'
+                                        });
+                                        setButtonContextMenu(null);
+                                    }}
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                >
+                                    <span className="p-1 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                                    </span>
+                                    Edit Node
+                                </button>
+                            </div>
+                        </>
+                    )}
+
+                    {/* Embed Double Click Context Menu */}
+                    {embedContextMenu && (
+                        <>
+                            <div className="fixed inset-0 z-[9997]" onClick={() => setEmbedContextMenu(null)} />
+                            <div
+                                className="absolute z-[9998] bg-slate-900/95 backdrop-blur-xl border border-slate-700/50 shadow-2xl rounded-2xl p-2 w-[200px] sm:w-[240px] flex flex-col gap-1 context-menu-enter"
+                                style={{
+                                    left: embedContextMenu.x,
+                                    top: embedContextMenu.y,
+                                    transform: 'translate(-50%, -50%)'
+                                }}
+                            >
+                                <button
+                                    onClick={() => {
+                                        const match = embedContextMenu.embedCode.match(/src="([^"]+)"/);
+                                        if (match) {
+                                            window.open(match[1], '_blank');
+                                        } else {
+                                            alert("No URL found in this embed.");
+                                        }
+                                        setEmbedContextMenu(null);
+                                    }}
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                >
+                                    <span className="p-1 rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                    </span>
+                                    Open in New Window
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setFullscreenEmbed(embedContextMenu.embedCode);
+                                        setEmbedContextMenu(null);
+                                    }}
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                >
+                                    <span className="p-1 rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                                    </span>
+                                    Show Here
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setEditing({
+                                            id: embedContextMenu.nodeId,
+                                            x: embedContextMenu.x,
+                                            y: embedContextMenu.y,
+                                            text: embedContextMenu.exactContent,
+                                            isGhost: embedContextMenu.isGhost,
+                                            mode: 'input'
+                                        });
+                                        setEmbedContextMenu(null);
+                                    }}
+                                    className="w-full text-left px-3 py-2.5 sm:py-2 text-sm sm:text-xs font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                >
+                                    <span className="p-1 rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                                    </span>
+                                    Edit Node
+                                </button>
+                            </div>
+                        </>
+                    )}
+
+                    {/* Embed Side Panel Menu */}
+                    {embedSidePanel && (() => {
+                        const isRootNode = embedSidePanel.nodeId === mapData.id;
+                        return (
+                            <>
+                                <div className="fixed inset-0 z-[9997]" onClick={() => setEmbedSidePanel(null)} onContextMenu={(e) => { e.preventDefault(); setEmbedSidePanel(null); }} />
+                                <div
+                                    className="absolute z-[9998] bg-slate-900/95 backdrop-blur-2xl border-y border-l border-slate-700/50 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] rounded-l-2xl p-1.5 w-[180px] flex flex-col gap-1 overflow-y-auto custom-thin-scrollbar slide-in-side-panel"
+                                    style={{
+                                        left: embedSidePanel.x,
+                                        top: embedSidePanel.y,
+                                        height: embedSidePanel.height
+                                    }}
+                                >
+                                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider px-2 py-0.5 mb-0.5">View Options</div>
+                                    
+                                    <button
+                                        onClick={() => {
+                                            const match = embedSidePanel.embedCode.match(/src="([^"]+)"/);
+                                            if (match) {
+                                                window.open(match[1], '_blank');
+                                            } else {
+                                                alert("No URL found in this embed.");
+                                            }
+                                            setEmbedSidePanel(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                    >
+                                        <span className="p-[3px] rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                                        </span>
+                                        Open in New Window
+                                    </button>
+                                    
+                                    <button
+                                        onClick={() => {
+                                            setFullscreenEmbed(embedSidePanel.embedCode);
+                                            setEmbedSidePanel(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                    >
+                                        <span className="p-[3px] rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                                        </span>
+                                        Show Fullscreen
+                                    </button>
+
+                                    <div className="h-px bg-slate-700/50 my-1 mx-2" />
+                                    <div className="text-[9px] font-bold text-slate-400 uppercase tracking-wider px-2 py-0.5 mb-0.5">Edit Options</div>
+
+                                    <button
+                                        onClick={() => {
+                                            setEditing({
+                                                id: embedSidePanel.nodeId,
+                                                x: embedSidePanel.x,
+                                                y: embedSidePanel.y,
+                                                text: embedSidePanel.exactContent,
+                                                isGhost: embedSidePanel.isGhost,
+                                                mode: 'input'
+                                            });
+                                            setEmbedSidePanel(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-amber-600/20 text-amber-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                    >
+                                        <span className="p-[3px] rounded-lg bg-amber-500/20 text-amber-400 group-hover:bg-amber-500 group-hover:text-white transition-colors">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"></path></svg>
+                                        </span>
+                                        Edit Node
+                                    </button>
+
+                                    <button
+                                        onClick={() => {
+                                            setEditing({
+                                                id: 'NEW_CHILD',
+                                                x: embedSidePanel.x,
+                                                y: embedSidePanel.y,
+                                                text: '',
+                                                isGhost: false,
+                                                action: 'NEW_CHILD',
+                                                targetNodeId: embedSidePanel.nodeId,
+                                                mode: 'input'
+                                            });
+                                            setEmbedSidePanel(null);
+                                        }}
+                                        className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-blue-600/20 text-blue-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                    >
+                                        <span className="p-[3px] rounded-lg bg-blue-500/20 text-blue-400 group-hover:bg-blue-500 group-hover:text-white transition-colors">
+                                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
+                                        </span>
+                                        Add Child Node
+                                    </button>
+
+                                    {!isRootNode && (
+                                        <>
+                                            <button
+                                                onClick={() => {
+                                                    setEditing({
+                                                        id: 'INSERT_SIBLING',
+                                                        x: embedSidePanel.x,
+                                                        y: embedSidePanel.y,
+                                                        text: '',
+                                                        isGhost: false,
+                                                        action: 'INSERT_SIBLING',
+                                                        targetNodeId: embedSidePanel.nodeId,
+                                                        mode: 'input'
+                                                    });
+                                                    setEmbedSidePanel(null);
+                                                }}
+                                                className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-emerald-600/20 text-emerald-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                            >
+                                                <span className="p-[3px] rounded-lg bg-emerald-500/20 text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white transition-colors">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14M12 5v14" /></svg>
+                                                </span>
+                                                Add Sibling Node
+                                            </button>
+                                            <button
+                                                onClick={() => {
+                                                    setEditing({
+                                                        id: 'INSERT_PARENT',
+                                                        x: embedSidePanel.x,
+                                                        y: embedSidePanel.y,
+                                                        text: '',
+                                                        isGhost: false,
+                                                        action: 'INSERT_PARENT',
+                                                        targetNodeId: embedSidePanel.nodeId,
+                                                        mode: 'input'
+                                                    });
+                                                    setEmbedSidePanel(null);
+                                                }}
+                                                className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-purple-600/20 text-purple-300 hover:text-white flex items-center gap-2 group transition-colors"
+                                            >
+                                                <span className="p-[3px] rounded-lg bg-purple-500/20 text-purple-400 group-hover:bg-purple-500 group-hover:text-white transition-colors">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 19V5M5 12l7-7 7 7" /></svg>
+                                                </span>
+                                                Insert Parent Node
+                                            </button>
+                                        </>
+                                    )}
+
+                                    <div className="h-px bg-slate-700/50 my-1 mx-2" />
+
+                                    {!isRootNode && (
+                                        <button
+                                            onClick={() => {
+                                                if (window.confirm('Are you sure you want to delete this node?')) {
+                                                    handleDeleteNode(embedSidePanel.nodeId);
+                                                }
+                                                setEmbedSidePanel(null);
+                                            }}
+                                            className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-red-600/20 text-red-400 hover:text-red-300 flex items-center gap-2 group transition-colors"
+                                        >
+                                            <span className="p-[3px] rounded-lg bg-red-500/10 text-red-400 group-hover:bg-red-500 group-hover:text-white transition-colors">
+                                                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M10 11v6M14 11v6" /></svg>
+                                            </span>
+                                            Delete Node
+                                        </button>
+                                    )}
+                                </div>
+                            </>
                         );
                     })()}
 
@@ -1498,23 +2371,17 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                         }
 
                         return (
-                            <div
-                                style={{
-                                    position: 'fixed',
-                                    top: '50%',
-                                    left: '50%',
-                                    transform: 'translate(-50%, -50%)',
-                                    zIndex: 9999,
-                                }}
-                            >
-                                <NodeInputControl
-                                    initialValue={editing.text}
-                                    nodeId={editing.id}
-                                    onSubmit={(val) => {
-                                        handleSave(val);
-                                    }}
-                                    onCancel={() => setEditing(null)}
-                                />
+                            <div className="fixed inset-0 z-[9999] flex items-center justify-center pointer-events-none">
+                                <div className="pointer-events-auto">
+                                    <NodeInputControl
+                                        initialValue={editing.text}
+                                        nodeId={editing.id}
+                                        onSubmit={(val) => {
+                                            handleSave(val);
+                                        }}
+                                        onCancel={() => setEditing(null)}
+                                    />
+                                </div>
                             </div>
                         );
                     })()}
@@ -1804,6 +2671,66 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                     </div>
                 </div>
             )}
+
+            {/* Fullscreen Embed Modal */}
+            {fullscreenEmbed && (
+                <div 
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                        backdropFilter: 'blur(8px)',
+                        zIndex: 99999,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '40px'
+                    }}
+                    onClick={() => setFullscreenEmbed(null)}
+                >
+                    <button
+                        onClick={() => setFullscreenEmbed(null)}
+                        style={{
+                            position: 'absolute',
+                            top: '24px',
+                            right: '24px',
+                            background: 'rgba(255,255,255,0.1)',
+                            border: '1px solid rgba(255,255,255,0.2)',
+                            borderRadius: '50%',
+                            width: '40px',
+                            height: '40px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: 'white',
+                            cursor: 'pointer',
+                            transition: '0.2s',
+                            zIndex: 100000
+                        }}
+                        onMouseOver={e => e.currentTarget.style.background='rgba(255,255,255,0.2)'}
+                        onMouseOut={e => e.currentTarget.style.background='rgba(255,255,255,0.1)'}
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                    
+                    <div 
+                        onClick={e => e.stopPropagation()}
+                        style={{
+                            width: '90vw',
+                            height: '80vh',
+                            maxWidth: '1400px',
+                            background: '#0f172a',
+                            borderRadius: '16px',
+                            overflow: 'hidden',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
+                        }}
+                    >
+                        <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: fullscreenEmbed }} />
+                    </div>
+                </div>
+            )}
+
             {/* Fullscreen Media Modal */}
             {fullscreenMedia && (
                 <div 

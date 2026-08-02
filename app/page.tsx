@@ -110,8 +110,10 @@ export default function Dashboard() {
           await deleteDoc(doc(db, 'deleted_media', docSnap.id));
         });
         await Promise.all(deletePromises);
-      } catch (e) {
-        console.error("Media GC Error", e);
+      } catch (e: any) {
+        if (e?.code !== 'permission-denied') {
+          console.error("Media GC Error", e);
+        }
       }
 
     } catch (e) {
@@ -287,7 +289,7 @@ export default function Dashboard() {
           <h2 className="text-2xl font-bold text-white">Your Mind Maps</h2>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6">
           {/* Create New Mind Map Card */}
           <button
             onClick={() => setIsNameModalOpen(true)}
