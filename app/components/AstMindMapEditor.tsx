@@ -1271,8 +1271,8 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
         }
     };
 
-    const handleDelete = () => {
-        const targetId = editing?.id || contextMenu?.nodeId;
+    const handleDelete = (explicitId?: string | React.MouseEvent) => {
+        const targetId = typeof explicitId === 'string' ? explicitId : (editing?.id || contextMenu?.nodeId);
         const isGhost = editing?.isGhost || false;
 
         if (!targetId || isGhost) return;
@@ -2315,9 +2315,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                     {!isRootNode && (
                                         <button
                                             onClick={() => {
-                                                if (window.confirm('Are you sure you want to delete this node?')) {
-                                                    handleDeleteNode(embedSidePanel.nodeId);
-                                                }
+                                                handleDelete(embedSidePanel.nodeId);
                                                 setEmbedSidePanel(null);
                                             }}
                                             className="w-full text-left px-2 py-1.5 text-[11px] font-medium rounded-xl hover:bg-red-600/20 text-red-400 hover:text-red-300 flex items-center gap-2 group transition-colors"
