@@ -1495,7 +1495,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                     if (embedMatch) {
                         const encodedHtml = embedMatch[1];
                         // Replace the entire .embed-content-area div with our placeholder
-                        node.content = node.content.replace(/<div class="embed-content-area".*?<\/div>\s*<\/div>/, (match) => {
+                        node.content = node.content.replace(/<div class="embed-content-area".*?<\/div>\s*<\/div>/, (match: string) => {
                             return `<div class="embed-content-area" style="width: 100%; height: 100%; min-height: 150px; pointer-events: auto; overflow: hidden; position: relative; background: rgba(0,0,0,0.4); display:flex; flex-direction:column; align-items:center; justify-content:center;">
                                 <span style="font-size:24px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">🔗</span>
                                 <button class="load-media-btn" onclick="window.loadEmbed(this, '${encodedHtml}')" style="margin-top:8px; padding:6px 16px; font-size:12px; font-weight:600; cursor:pointer; background:rgba(255,255,255,0.2); backdrop-filter:blur(4px); color:white; border:1px solid rgba(255,255,255,0.4); border-radius:20px; transition:all 0.2s; box-shadow:0 4px 6px rgba(0,0,0,0.3);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">Load Embed</button>
