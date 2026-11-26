@@ -22,10 +22,14 @@ export interface UserData {
     extraPins: number;    // Purchased extra pins
     totalMaps: number;    // Statistics
     autoSaveInterval: number; // User preference
+    storageUsed: number;  // Current media storage used in bytes
+    extraStorage?: number; // Purchased extra storage in bytes
+    storageLimit: number; // Maximum allowed storage in bytes based on plan
     role: 'member' | 'admin';
     banUntil?: number;
     isPermabanned?: boolean;
     planExpiresAt?: number;
+    activePerks?: { type: string; amount: number; expiresAt: number; packageId: string }[];
 }
 
 export interface AppSettings {
@@ -44,9 +48,27 @@ export interface AppSettings {
         pro: number;
         ultra: number;
     };
+    storageLimits: {
+        free: number;
+        pro: number;
+        ultra: number;
+    };
     autoSaveOptions: { label: string; value: number; minPlan: 'free' | 'pro' | 'ultra' }[];
     additionalProjectSlots: { label: string; price: number; slots: number }[];
     additionalPinSlots: { label: string; price: number; slots: number }[];
+    additionalStoragePackages: { label: string; price: number; amount: number }[];
+    offers: {
+        id: string;
+        label: string;
+        targetPackageId: string;
+        targetPackageType: 'plans' | 'addSlots' | 'addPins' | 'addStorage';
+        discountType: 'percentage' | 'fixed';
+        discountValue: number;
+        durationDays: number | null;
+        finalPrice: number;
+        expiresAt: number | null;
+        maxUses: number | null;
+    }[];
     bankDetails: {
         bankName: string;
         branch: string;
@@ -105,10 +127,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const plansDoc = await getDoc(doc(db, 'settings', 'plans'));
             const pinsDoc = await getDoc(doc(db, 'settings', 'pin_settings'));
             const limitsDoc = await getDoc(doc(db, 'settings', 'default_project_limit'));
+            const storageLimitsDoc = await getDoc(doc(db, 'settings', 'storage_limits'));
             // Fetch auto_saving_times for Mind Maps (Restoring logic)
             const autoSaveDoc = await getDoc(doc(db, 'settings', 'auto_saving_times'));
             const addProjDoc = await getDoc(doc(db, 'settings', 'additional_project_items'));
             const addPinsDoc = await getDoc(doc(db, 'settings', 'additional_project_pins'));
+            const addStorageDoc = await getDoc(doc(db, 'settings', 'additional_storage_items'));
+            const offersDoc = await getDoc(doc(db, 'settings', 'offers'));
             const bankDoc = await getDoc(doc(db, 'settings', 'bank_details'));
             const systemDoc = await getDoc(doc(db, 'settings', 'system'));
 
@@ -144,9 +169,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     pro: limitsDoc.data()?.pro ?? 20,
                     ultra: limitsDoc.data()?.ultra ?? 50,
                 },
+                storageLimits: {
+                    free: storageLimitsDoc.exists() ? storageLimitsDoc.data()?.free : 100 * 1024 * 1024,
+                    pro: storageLimitsDoc.exists() ? storageLimitsDoc.data()?.pro : 1024 * 1024 * 1024,
+                    ultra: storageLimitsDoc.exists() ? storageLimitsDoc.data()?.ultra : 10 * 1024 * 1024 * 1024,
+                },
                 autoSaveOptions: [],
                 additionalProjectSlots: [],
                 additionalPinSlots: [],
+                additionalStoragePackages: [],
+                offers: [],
                 bankDetails: {
                     bankName: bankDoc.data()?.bank_name || '',
                     branch: bankDoc.data()?.banch || '',
@@ -187,7 +219,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             // Parse Add Pin Slots
             if (addPinsDoc.exists()) {
                 Object.entries(addPinsDoc.data()).forEach(([key, price]) => {
-                    const match = key.match(/(\d+)\s+pins/i);
+                    const match = key.match(/(\d+)\s+Pins/i);
                     const slots = match ? parseInt(match[1]) : 0;
                     parsedSettings.additionalPinSlots.push({
                         label: key.replace(/_/g, ' '),
@@ -196,6 +228,45 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     });
                 });
             }
+
+            // Parse Add Storage Packages
+            if (addStorageDoc.exists()) {
+                Object.entries(addStorageDoc.data()).forEach(([key, price]) => {
+                    const match = key.match(/(\d+)\s+GB/i);
+                    const amount = match ? parseInt(match[1]) : 0;
+                    parsedSettings.additionalStoragePackages.push({
+                        label: key.replace(/_/g, ' '),
+                        price: Number(price),
+                        amount: amount
+                    });
+                });
+            }
+
+            // Parse Offers
+            if (offersDoc.exists()) {
+                Object.entries(offersDoc.data()).forEach(([key, offerObj]: [string, any]) => {
+                    // Type check to avoid crashes during migration
+                    if (typeof offerObj === 'object' && offerObj !== null && offerObj.targetPackageId) {
+                        parsedSettings.offers.push({
+                            id: key,
+                            label: offerObj.label || key,
+                            targetPackageId: offerObj.targetPackageId,
+                            targetPackageType: offerObj.targetPackageType,
+                            discountType: offerObj.discountType,
+                            discountValue: Number(offerObj.discountValue),
+                            durationDays: Number(offerObj.durationDays),
+                            finalPrice: Number(offerObj.finalPrice),
+                            expiresAt: offerObj.expiresAt || null,
+                            maxUses: offerObj.maxUses ?? null
+                        });
+                    }
+                });
+            }
+
+            // Optional: Sort them logically by slots/amount
+            parsedSettings.additionalProjectSlots.sort((a, b) => a.slots - b.slots);
+            parsedSettings.additionalPinSlots.sort((a, b) => a.slots - b.slots);
+            parsedSettings.additionalStoragePackages.sort((a, b) => a.amount - b.amount);
 
             setSettings(parsedSettings);
             // Cache It
@@ -252,6 +323,46 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     }
                 }
 
+                // Check Perk Expirations
+                let activePerks = data.activePerks || [];
+                let needsPerkUpdate = false;
+                let expiredSlots = 0, expiredPins = 0, expiredStorage = 0;
+                const now = Date.now();
+
+                const validPerks = activePerks.filter((perk: any) => {
+                    if (perk.expiresAt && now > perk.expiresAt) {
+                        needsPerkUpdate = true;
+                        if (perk.type === 'slots') expiredSlots += perk.amount;
+                        if (perk.type === 'pins') expiredPins += perk.amount;
+                        if (perk.type === 'storage') expiredStorage += perk.amount;
+                        return false; // remove from valid
+                    }
+                    return true;
+                });
+
+                if (needsPerkUpdate) {
+                    try {
+                        const newExtraSlots = Math.max(0, (data.extraSlots || 0) - expiredSlots);
+                        const newExtraPins = Math.max(0, (data.extraPins || 0) - expiredPins);
+                        const newExtraStorage = Math.max(0, (data.extraStorage || 0) - expiredStorage);
+                        
+                        await updateDoc(userRef, {
+                            activePerks: validPerks,
+                            extraSlots: newExtraSlots,
+                            extraPins: newExtraPins,
+                            extraStorage: newExtraStorage
+                        });
+                        
+                        data.activePerks = validPerks;
+                        data.extraSlots = newExtraSlots;
+                        data.extraPins = newExtraPins;
+                        data.extraStorage = newExtraStorage;
+                        console.log("Expired perks cleaned up.");
+                    } catch (e) {
+                        console.error("Error cleaning up expired perks", e);
+                    }
+                }
+
                 setUserData({
                     uid,
                     email: data.email,
@@ -268,7 +379,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     role: data.role || 'member',
                     banUntil: data.banUntil,
                     isPermabanned: data.isPermabanned,
-                    planExpiresAt: data.planExpiresAt
+                    planExpiresAt: data.planExpiresAt,
+                    activePerks: data.activePerks || [],
+                    storageUsed: data.storageUsed || 0,
+                    extraStorage: data.extraStorage || 0,
+                    storageLimit: data.storageLimit || (data.plan === 'ultra' ? 10 * 1024 * 1024 * 1024 : data.plan === 'pro' ? 1024 * 1024 * 1024 : 100 * 1024 * 1024)
                 });
             } else {
                 // Initialize New User
@@ -285,7 +400,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                     extraPins: 0,
                     totalMaps: 0,
                     autoSaveInterval: 1800000, // 30 min
-                    role: 'member'
+                    role: 'member',
+                    activePerks: [],
+                    storageUsed: 0,
+                    storageLimit: 100 * 1024 * 1024
                 };
                 await setDoc(userRef, newUser as any);
                 setUserData(newUser);

@@ -1,0 +1,16 @@
+{
+  "name": "mindmap-r2-storage",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261123.1",
+    "wrangler": "^4.0.0"
+  },
+  "dependencies": {
+    "@cloudflare/workerd-windows-64": "^1.20261125.1"
+  }
+}

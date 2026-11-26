@@ -7,6 +7,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../context/AuthProvider';
 import ProfilePanel, { ProfileModal, UpgradeModal, BuySlotsModal, SettingsModal } from './ProfilePanel';
+import ShopModal from './ShopModal';
 import { useState, useEffect, useRef } from 'react';
 
 // Simplified Header Props (remove user/onLogout props as they come from context)
@@ -33,7 +34,7 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
     const pathname = usePathname();
     const isEditMode = pathname?.startsWith('/map/');
     const [showProfile, setShowProfile] = useState(false);
-    const [activeModal, setActiveModal] = useState<'profile' | 'upgrade' | 'slots' | 'settings' | null>(null);
+    const [activeModal, setActiveModal] = useState<'profile' | 'upgrade' | 'slots' | 'settings' | 'shop-plans' | 'shop-slots' | null>(null);
     const profileBtnRef = useRef<HTMLButtonElement>(null);
     const [panelPos, setPanelPos] = useState({ top: 0, right: 0 });
 
@@ -48,7 +49,7 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
         setShowProfile(!showProfile);
     };
 
-    const handleAction = (modal: 'profile' | 'upgrade' | 'slots' | 'settings') => {
+    const handleAction = (modal: 'profile' | 'upgrade' | 'slots' | 'settings' | 'shop-plans' | 'shop-slots') => {
         setShowProfile(false);
         setActiveModal(modal);
     };
@@ -199,6 +200,8 @@ export default function Header({ search, trash, actions, hideTitle = false }: He
             {activeModal === 'upgrade' && <UpgradeModal isOpen={true} onClose={() => setActiveModal(null)} />}
             {activeModal === 'slots' && <BuySlotsModal isOpen={true} onClose={() => setActiveModal(null)} />}
             {activeModal === 'settings' && <SettingsModal isOpen={true} onClose={() => setActiveModal(null)} />}
+            {activeModal === 'shop-plans' && <ShopModal isOpen={true} onClose={() => setActiveModal(null)} initialTab="plans" />}
+            {activeModal === 'shop-slots' && <ShopModal isOpen={true} onClose={() => setActiveModal(null)} initialTab="slots" />}
         </header>
     );
 }

@@ -23,6 +23,8 @@ import Header from './components/Header';
 import LoadingScreen from './components/LoadingScreen';
 
 import { useAuth } from '@/app/context/AuthProvider';
+import ShopModal from './components/ShopModal';
+import { Store } from 'lucide-react';
 
 export default function Dashboard() {
   const { user, userData, settings, loading: authLoading, logout } = useAuth();
@@ -35,6 +37,7 @@ export default function Dashboard() {
   const [creating, setCreating] = useState(false);
   const [isNameModalOpen, setIsNameModalOpen] = useState(false);
   const [newMapTitle, setNewMapTitle] = useState('');
+  const [isShopOpen, setIsShopOpen] = useState(false);
 
   // Trash State
   const [isTrashOpen, setIsTrashOpen] = useState(false);
@@ -301,6 +304,23 @@ export default function Dashboard() {
               </svg>
             </div>
             <span className="font-medium text-gray-300 group-hover:text-blue-400">Create New Mind Map</span>
+            {(() => {
+              const cloudMaps = activeMaps.filter(m => !m.id.startsWith('local-'));
+              const cloudLimit = settings ? ((settings.projectLimits[userData?.plan ?? 'free'] ?? 3) + (userData?.extraSlots || 0)) : 3;
+              const isLocal = cloudMaps.length >= cloudLimit;
+              const remaining = isLocal ? 0 : cloudLimit - cloudMaps.length;
+              return (
+                <span className="text-[10px] mt-1 font-bold text-zinc-500 bg-zinc-800/50 px-2 py-0.5 rounded-full border border-zinc-700/50">
+                  {isLocal ? (
+                    <span className="text-blue-400 flex items-center gap-1">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg> Saving Locally
+                    </span>
+                  ) : (
+                    `Cloud Slots: ${remaining} Remaining`
+                  )}
+                </span>
+              );
+            })()}
           </button>
 
           {/* Mind Map Cards */}
@@ -488,6 +508,16 @@ export default function Dashboard() {
           </div>
         </div>
       )}
+      <ShopModal isOpen={isShopOpen} onClose={() => setIsShopOpen(false)} />
+
+      {/* Floating Shop Button */}
+      <button
+        onClick={() => setIsShopOpen(true)}
+        className="fixed bottom-8 right-8 w-14 h-14 bg-gradient-to-r from-purple-500 to-fuchsia-600 rounded-full flex flex-col items-center justify-center shadow-[0_10px_30px_rgba(168,85,247,0.4)] hover:shadow-[0_15px_40px_rgba(168,85,247,0.6)] hover:scale-110 transition-all z-40 border-2 border-white/20"
+      >
+        <Store size={20} className="text-white" />
+        <span className="text-[9px] font-black text-white uppercase tracking-wider mt-0.5">Shop</span>
+      </button>
     </div>
   );
 }

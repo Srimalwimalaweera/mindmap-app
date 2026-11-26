@@ -1,0 +1,91 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // --- Helper Functions ---
+    
+    // Check if user is signed in
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Check if user is an Admin
+    function isAdmin() {
+      return isSignedIn() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Check if the doc belongs to the user
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // --- Users Collection ---
+    match /users/{userId} {
+      // Owner can read/write their profile
+      allow read, write: if isOwner(userId);
+      
+      // Admin can read/write ANY profile + List for Count
+      allow read, list, write: if isAdmin();
+    }
+
+    // --- Mind Maps (markmaps) ---
+    match /markmaps/{mapId} {
+      // Create: Must be signed in AND set userId to own uid
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      
+      // Read/Update/Delete: Owner
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      // Admin: Full Access + List for Count
+      allow read, list, update, delete: if isAdmin();
+    }
+
+    // --- Digital Books (books) ---
+    match /books/{bookId} {
+      // Create: Must be signed in AND set userId to own uid
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      
+      // Read/Update/Delete: Owner
+      allow read, update, delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      // Admin: Full Access + List for Count
+      allow read, list, update, delete: if isAdmin();
+    }
+
+    // --- Payment Requests ---
+    match /payment_requests/{requestId} {
+      // Create: Signed in users
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      
+      // Read: Owner
+      allow read: if isSignedIn() && resource.data.userId == request.auth.uid;
+      
+      // Admin: Full Access (Read/List/Update/Delete)
+      allow read, list, update, delete: if isAdmin();
+    }
+
+    // --- Settings (Plans, Limits, Bank Details, System) ---
+    match /settings/{docId} {
+      // Read: Public (needed to show prices/plans)
+      allow read: if true;
+      
+      // Write: ONLY Admin
+      allow write: if isAdmin();
+    }
+
+    // --- Redeem Codes ---
+    match /redeem_codes/{codeId} {
+      // Anyone can read a code to redeem it
+      allow read: if isSignedIn();
+      
+      // Admins can create/delete codes
+      allow create, delete: if isAdmin();
+      
+      // Only allow incrementing usage tracking; prevent modifying code value/type/rewards
+      allow update: if isSignedIn()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usedCount', 'usedBy']);
+    }
+  }
+}

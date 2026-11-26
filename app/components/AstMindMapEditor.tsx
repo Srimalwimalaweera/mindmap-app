@@ -9,12 +9,14 @@ import TableEditorModal from './mind-map/TableEditorModal';
 import CodeEditorModal from './mind-map/CodeEditorModal';
 import { useAuth } from '../context/AuthProvider';
 import { db, storage } from '@/lib/firebase';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, increment } from 'firebase/firestore';
 import { ref, deleteObject } from 'firebase/storage';
 
 const transformer = new Transformer();
 const GHOST_SYMBOL = '@[[ADD_NEW]]';
 import { CustomNode } from '@/app/types/mindmap';
+import { sanitizeHtml } from '@/app/utils/sanitize';
+import { getCachedMedia } from '@/app/utils/localDB';
 
 // Session cache to handle immediate fallback for deleted media before undo/cache flush
 const deletedMediaSessionCache = new Set<string>();
@@ -181,6 +183,9 @@ interface EditorProps {
     canUndo?: boolean;
     canRedo?: boolean;
     onSave?: (data?: CustomNode) => Promise<void>;
+    currentMapId?: string;
+    blockedMapIds?: string[];
+    onOpenLinkedMap?: (mapId: string, title: string) => void;
 }
 
 interface EditingState {
@@ -216,7 +221,61 @@ const forceDownloadMedia = async (src: string) => {
     }
 };
 
-export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onRedo, canUndo = false, canRedo = false, onSave }: EditorProps) {
+export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onRedo, canUndo = false, canRedo = false, onSave, currentMapId, blockedMapIds = [], onOpenLinkedMap }: EditorProps) {
+    const resolvedMediaCacheRef = useRef<Map<string, string>>(new Map());
+
+    const hydrateCachedImages = async (svgEl: SVGSVGElement | null) => {
+        if (!svgEl) return;
+        const buttons = svgEl.querySelectorAll('.load-media-btn[data-type="image"]');
+        if (!buttons.length) return;
+
+        let hydratedAny = false;
+        await Promise.all(
+            Array.from(buttons).map(async (btn) => {
+                const src = btn.getAttribute('data-src');
+                const container = btn.closest('.media-placeholder-container');
+                if (!src || !container || deletedMediaSessionCache.has(src)) return;
+
+                let resolvedUrl = resolvedMediaCacheRef.current.get(src);
+                if (!resolvedUrl && src.startsWith('gdrive://')) {
+                    const withoutScheme = src.slice('gdrive://'.length);
+                    const [fileId, queryPart] = withoutScheme.split('?');
+                    const versionMatch = queryPart?.match(/v=([^&]+)/);
+                    const version = versionMatch ? versionMatch[1] : '1';
+                    const blob = await getCachedMedia(`gdrive:${fileId}`, version);
+                    if (blob) {
+                        resolvedUrl = URL.createObjectURL(blob);
+                        resolvedMediaCacheRef.current.set(src, resolvedUrl);
+                    }
+                } else if (!resolvedUrl) {
+                    const blob = await getCachedMedia(`url:${src}`);
+                    if (blob) {
+                        resolvedUrl = URL.createObjectURL(blob);
+                        resolvedMediaCacheRef.current.set(src, resolvedUrl);
+                    }
+                }
+
+                if (!resolvedUrl) return;
+
+                hydratedAny = true;
+                container.innerHTML = `
+                    <div style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
+                        <img src="${resolvedUrl}" onload="window.dispatchEvent(new Event('media-loaded'))" style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);" />
+                        <button class="media-download-btn" data-src="${resolvedUrl}" title="Download Image" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        </button>
+                        <button class="media-fullscreen-btn" data-src="${resolvedUrl}" data-type="image" title="Full Screen" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                        </button>
+                    </div>
+                `;
+            })
+        );
+
+        if (hydratedAny) {
+            mmRef.current?.fit();
+        }
+    };
     const { userData } = useAuth();
     const svgRef = useRef<SVGSVGElement>(null);
     const mmRef = useRef<Markmap | null>(null);
@@ -491,7 +550,18 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
                         mmRef.current.setData(root);
                         mmRef.current.fit();
+                        setTimeout(() => hydrateCachedImages(svgRef.current), 40);
                     }
+
+                    // Auto-hydrate cached images whenever collapsed nodes are expanded
+                    let hydrateTimer: ReturnType<typeof setTimeout> | null = null;
+                    const observer = new MutationObserver(() => {
+                        if (hydrateTimer) clearTimeout(hydrateTimer);
+                        hydrateTimer = setTimeout(() => {
+                            hydrateCachedImages(svgRef.current);
+                        }, 60);
+                    });
+                    observer.observe(svgElement, { childList: true, subtree: true });
 
                     // 3. Global Event Delegation (Robust Interaction)
                     // Instead of attaching listeners to transient nodes, we listen on the static SVG
@@ -516,49 +586,67 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                             event.stopPropagation();
                             const btn = loadMediaBtn;
                             const src = btn.getAttribute('data-src');
-                            const type = btn.getAttribute('data-type');
+                            const type = (btn.getAttribute('data-type') === 'video' ? 'video' : 'image') as 'image' | 'video';
                             const container = btn.closest('.media-placeholder-container');
 
                             if (container && src) {
-                                if (type === 'image') {
-                                    const isDeleted = deletedMediaSessionCache.has(src);
-                                    
-                                    if (isDeleted) {
-                                        container.innerHTML = `<div style="display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;">🖼️ Media Deleted</div>`;
-                                        mmRef.current?.fit();
-                                        return;
-                                    }
-
-                                    container.innerHTML = `
-                                        <div style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
-                                            <img src="${src}" onload="window.dispatchEvent(new Event('media-loaded'))" onerror="this.onerror=null; this.outerHTML='<div style=\\'display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;\\'>🖼️ Media Deleted</div>'" style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);" />
-                                            <button class="media-download-btn" data-src="${src}" title="Download Image" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                                            </button>
-                                            <button class="media-fullscreen-btn" data-src="${src}" data-type="image" title="Full Screen" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
-                                            </button>
-                                        </div>
-                                    `;
-                                } else {
-                                    const isDeleted = deletedMediaSessionCache.has(src);
-                                    
-                                    if (isDeleted) {
-                                        container.innerHTML = `<div style="display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;">🎞️ Media Deleted</div>`;
-                                        mmRef.current?.fit();
-                                        return;
-                                    }
-
-                                    container.innerHTML = `
-                                        <div class="media-video-container" style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
-                                            <video src="${src}" onloadedmetadata="window.dispatchEvent(new Event('media-loaded'))" onerror="this.onerror=null; this.outerHTML='<div style=\\'display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;\\'>🎞️ Media Deleted</div>'" controls autoplay style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);"></video>
-                                            <button class="media-fullscreen-btn" data-src="${src}" data-type="video" title="Full Screen" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
-                                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
-                                            </button>
-                                        </div>
-                                    `;
+                                const isDeleted = deletedMediaSessionCache.has(src);
+                                if (isDeleted) {
+                                    container.innerHTML = `<div style="display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;">${type === 'video' ? '🎞️' : '🖼️'} Media Deleted</div>`;
+                                    mmRef.current?.fit();
+                                    return;
                                 }
-                                mmRef.current?.fit();
+
+                                const renderResolvedMedia = (resolvedSrc: string) => {
+                                    if (type === 'image') {
+                                        container.innerHTML = `
+                                            <div style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
+                                                <img src="${resolvedSrc}" onload="window.dispatchEvent(new Event('media-loaded'))" onerror="this.onerror=null; this.outerHTML='<div style=\\'display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;\\'>🖼️ Media Deleted</div>'" style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);" />
+                                                <button class="media-download-btn" data-src="${resolvedSrc}" title="Download Image" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                                </button>
+                                                <button class="media-fullscreen-btn" data-src="${resolvedSrc}" data-type="image" title="Full Screen" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                                                </button>
+                                            </div>
+                                        `;
+                                    } else {
+                                        container.innerHTML = `
+                                            <div class="media-video-container" style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
+                                                <video src="${resolvedSrc}" onloadedmetadata="window.dispatchEvent(new Event('media-loaded'))" onerror="this.onerror=null; this.outerHTML='<div style=\\'display:inline-flex; align-items:center; gap:8px; padding:8px 12px; background:rgba(239,68,68,0.1); border:1px dashed rgba(239,68,68,0.4); border-radius:8px; color:#ef4444; font-size:12px; font-weight:600;\\'>🎞️ Media Deleted</div>'" controls autoplay style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);"></video>
+                                                <button class="media-fullscreen-btn" data-src="${resolvedSrc}" data-type="video" title="Full Screen" style="position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                                                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                                                </button>
+                                            </div>
+                                        `;
+                                    }
+                                    mmRef.current?.fit();
+                                };
+
+                                // Google Drive on-demand load + Smart IndexedDB Cache
+                                if (src.startsWith('gdrive://')) {
+                                    const withoutScheme = src.slice('gdrive://'.length);
+                                    const [fileId, queryPart] = withoutScheme.split('?');
+                                    const versionMatch = queryPart?.match(/v=([^&]+)/);
+                                    const version = versionMatch ? versionMatch[1] : '1';
+
+                                    container.innerHTML = `<div style="display:inline-flex; align-items:center; gap:8px; padding:8px 14px; background:rgba(59,130,246,0.14); border:1px solid rgba(59,130,246,0.35); border-radius:8px; color:#93c5fd; font-size:12px; font-weight:600;">⏳ Loading from Drive / Cache...</div>`;
+                                    mmRef.current?.fit();
+
+                                    import('@/app/services/googleDriveService')
+                                        .then(({ loadDriveMediaObjectUrl }) => loadDriveMediaObjectUrl(fileId, type, version))
+                                        .then(({ objectUrl }) => {
+                                            renderResolvedMedia(objectUrl);
+                                        })
+                                        .catch((err) => {
+                                            console.error('Google Drive media load failed:', err);
+                                            container.innerHTML = `<div style="display:inline-flex; flex-direction:column; align-items:center; gap:6px; padding:10px 14px; background:rgba(245,158,11,0.12); border:1px dashed rgba(245,158,11,0.45); border-radius:8px; color:#fcd34d; font-size:11px; font-weight:600;"><span>⚠️ Drive Access Needed</span><button class="load-media-btn" data-src="${src}" data-type="${type}" style="padding:3px 10px; border-radius:6px; background:#3b82f6; color:#fff; border:none; cursor:pointer; font-size:11px;">Reconnect & Retry</button></div>`;
+                                            mmRef.current?.fit();
+                                        });
+                                    return;
+                                }
+
+                                renderResolvedMedia(src);
                             }
                             return;
                         }
@@ -680,6 +768,21 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                     const wrapperRect = wrapper.getBoundingClientRect();
                                     const rect = textEl.getBoundingClientRect();
                                     const nodeId = dataNode.payload?.id || dataNode.id || 'unknown';
+
+                                    // Handle Merge Node (Linked Map) Click (Single Click, Immediate)
+                                    const mergeCard = target.closest('.merge-node-card') || target.closest('[data-category="merge"]');
+                                    if (mergeCard && onOpenLinkedMap) {
+                                        if (clickTimerRef.current) {
+                                            clearTimeout(clickTimerRef.current);
+                                            clickTimerRef.current = null;
+                                        }
+                                        const targetMapId = decodeURIComponent(mergeCard.getAttribute('data-mapid') || '');
+                                        const targetMapTitle = decodeURIComponent(mergeCard.getAttribute('data-maptitle') || 'Linked Mind Map');
+                                        if (targetMapId) {
+                                            onOpenLinkedMap(targetMapId, targetMapTitle);
+                                        }
+                                        return;
+                                    }
 
                                     // Handle Embed Side Panel Button Click (Single Click, Immediate)
                                     if (target.closest('.embed-side-panel-btn')) {
@@ -1013,8 +1116,11 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                 }
                             }
                         }
+                        const bgBlurStyle = url.startsWith('gdrive://')
+                            ? 'background: linear-gradient(135deg, rgba(30,41,59,0.9), rgba(15,23,42,0.95));'
+                            : `background-image:url('${url}'); background-size:cover; background-position:center; filter:blur(10px); opacity:0.6;`;
                         return `<div class="media-placeholder-container image-node" style="display:inline-block; position:relative; width:${Math.round(renderWidth)}px; height:${Math.round(renderHeight)}px; border-radius:8px; overflow:hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);">
-                            <div style="position:absolute; inset:0; background-image:url('${url}'); background-size:cover; background-position:center; filter:blur(10px); opacity:0.6;"></div>
+                            <div style="position:absolute; inset:0; ${bgBlurStyle}"></div>
                             <div style="position:absolute; inset:0; background:rgba(0,0,0,0.4); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px;">
                                 <span style="font-size:24px; filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5));">🖼️</span>
                                 <button class="load-media-btn" data-src="${url}" data-type="image" style="padding:6px 16px; font-size:12px; font-weight:600; cursor:pointer; background:rgba(255,255,255,0.2); backdrop-filter:blur(4px); color:white; border:1px solid rgba(255,255,255,0.4); border-radius:20px; transition:all 0.2s; box-shadow:0 4px 6px rgba(0,0,0,0.3);" onmouseover="this.style.background='rgba(255,255,255,0.3)'" onmouseout="this.style.background='rgba(255,255,255,0.2)'">Load Image</button>
@@ -1093,6 +1199,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
             try {
                 mmRef.current.setData(root);
                 mmRef.current.fit();
+                setTimeout(() => hydrateCachedImages(svgRef.current), 40);
             } catch (e) {
                 console.error("Update error:", e);
             }
@@ -1253,6 +1360,9 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
     const processDeletedMedia = async (node: CustomNode) => {
         const urls = extractMediaUrls(node);
+        const { imagesBytes, videosBytes } = extractMediaQuotas(node);
+        const totalDeletedBytes = imagesBytes + videosBytes;
+
         if (urls.length > 0) {
             try {
                 for (const url of urls) {
@@ -1265,8 +1375,17 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                         await deleteObject(fileRef).catch(e => console.error("Error deleting from storage:", e));
                     }
                 }
+
+                // Reclaim quota if user is logged in
+                if (userData && totalDeletedBytes > 0) {
+                    const userRef = doc(db, 'users', userData.uid);
+                    await updateDoc(userRef, {
+                        storageUsed: increment(-totalDeletedBytes)
+                    });
+                    userData.storageUsed = Math.max(0, (userData.storageUsed || 0) - totalDeletedBytes);
+                }
             } catch (error) {
-                console.error("Error logging/deleting media", error);
+                console.error("Error logging/deleting media or updating quota", error);
             }
         }
     };
@@ -1845,30 +1964,6 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
     return (
         <div ref={wrapperRef} onClick={() => handleBackgroundClick()} onContextMenu={(e) => e.preventDefault()} className="w-full h-full relative overflow-hidden bg-transparent group select-none text-white">
-            
-            {/* Quota Display */}
-            {userPlan !== 'free' && (
-                <div className="absolute top-20 right-4 z-40 bg-slate-900/80 backdrop-blur-md border border-slate-700 p-2 rounded-xl text-[10px] text-slate-300 shadow-xl flex flex-col gap-1 pointer-events-none">
-                    <div className="font-semibold text-xs text-white mb-1 border-b border-slate-700 pb-1 flex items-center justify-between">
-                        Media Quotas
-                        <span className="text-[9px] bg-purple-500/20 text-purple-300 px-1.5 py-0.5 rounded ml-2">{userPlan.toUpperCase()}</span>
-                    </div>
-                    <div className="flex justify-between gap-4">
-                        <span>Images:</span>
-                        <span className={quotas.imagesBytes > imageLimitBytes ? 'text-red-400' : 'text-slate-100'}>
-                            {(quotas.imagesBytes / (1024 * 1024)).toFixed(1)}MB / {(imageLimitBytes / (1024 * 1024)).toFixed(0)}MB
-                        </span>
-                    </div>
-                    {userPlan === 'ultra' && (
-                        <div className="flex justify-between gap-4">
-                            <span>Videos:</span>
-                            <span className={quotas.videosBytes > videoLimitBytes ? 'text-red-400' : 'text-slate-100'}>
-                                {(quotas.videosBytes / (1024 * 1024)).toFixed(1)}MB / {(videoLimitBytes / (1024 * 1024)).toFixed(0)}MB
-                            </span>
-                        </div>
-                    )}
-                </div>
-            )}
 
             {/* Visual Mode */}
             {viewMode === 'visual' && (
@@ -2374,6 +2469,8 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                                     <NodeInputControl
                                         initialValue={editing.text}
                                         nodeId={editing.id}
+                                        currentMapId={currentMapId}
+                                        blockedMapIds={blockedMapIds}
                                         onSubmit={(val) => {
                                             handleSave(val);
                                         }}
@@ -2724,7 +2821,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                             boxShadow: '0 25px 50px -12px rgba(0,0,0,0.5)'
                         }}
                     >
-                        <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: fullscreenEmbed }} />
+                        <div style={{ width: '100%', height: '100%' }} dangerouslySetInnerHTML={{ __html: sanitizeHtml(fullscreenEmbed) }} />
                     </div>
                 </div>
             )}

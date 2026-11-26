@@ -5,8 +5,10 @@ import { useAuth } from '../context/AuthProvider';
 import { useRouter } from 'next/navigation';
 import { db } from '@/lib/firebase';
 import { approvePayment, getPayments, rejectPayment } from '../services/paymentService';
-import { Loader2, Check, X, ShieldAlert, History, Star, Briefcase, Shield, ArrowLeft, RefreshCw, AlertTriangle, ToggleLeft, ToggleRight, LayoutDashboard, Users, HardDrive, Search, Calendar, Filter, XCircle } from 'lucide-react';
+import { Loader2, Check, X, ShieldAlert, History, Star, Briefcase, Shield, ArrowLeft, RefreshCw, AlertTriangle, ToggleLeft, ToggleRight, LayoutDashboard, Users, HardDrive, Search, Calendar, Filter, XCircle, Tag } from 'lucide-react';
 import { getDoc, setDoc, doc, getCountFromServer, collection } from 'firebase/firestore';
+import OffersEditor from './components/OffersEditor';
+import RedeemCodeEditor from './components/RedeemCodeEditor';
 
 // Helper for Relative Time
 function timeAgo(date: number) {
@@ -124,7 +126,10 @@ function SettingsEditor() {
                 bank: await getDoc(doc(db, 'settings', 'bank_details')),
                 addSlots: await getDoc(doc(db, 'settings', 'additional_project_items')),
                 addPins: await getDoc(doc(db, 'settings', 'additional_project_pins')),
-                system: await getDoc(doc(db, 'settings', 'system')) // Fetch system settings
+                addStorage: await getDoc(doc(db, 'settings', 'additional_storage_items')),
+                offers: await getDoc(doc(db, 'settings', 'offers')),
+                system: await getDoc(doc(db, 'settings', 'system')), // Fetch system settings
+                storageLimits: await getDoc(doc(db, 'settings', 'storage_limits')) // Fetch storage limits
             };
             setConfig({
                 plans: docs.plans.data() || {},
@@ -133,7 +138,10 @@ function SettingsEditor() {
                 bank: docs.bank.data() || {},
                 addSlots: docs.addSlots.data() || {},
                 addPins: docs.addPins.data() || {},
-                system: docs.system.data() || { maintenanceMode: false }
+                addStorage: docs.addStorage.data() || {},
+                offers: docs.offers.data() || {},
+                system: docs.system.data() || { maintenanceMode: false },
+                storageLimits: docs.storageLimits.data() || { free: 104857600, pro: 1073741824, ultra: 10737418240 }
             });
         } catch (e) {
             console.error(e);
@@ -158,7 +166,10 @@ function SettingsEditor() {
             if (section === 'bank') docId = 'bank_details';
             if (section === 'addSlots') docId = 'additional_project_items';
             if (section === 'addPins') docId = 'additional_project_pins';
+            if (section === 'addStorage') docId = 'additional_storage_items';
+            if (section === 'offers') docId = 'offers';
             if (section === 'system') docId = 'system';
+            if (section === 'storageLimits') docId = 'storage_limits';
 
             // For dynamic lists (addSlots/addPins), we overwrite to support deletion. For others, merge is fine/safer.
             const overwrite = section === 'addSlots' || section === 'addPins';
@@ -167,6 +178,7 @@ function SettingsEditor() {
             setMsg('Saved!');
             setTimeout(() => setMsg(''), 3000);
             await refreshSettings();
+            await loadSettings();
         } catch (e) {
             alert('Error saving');
         } finally {
@@ -174,8 +186,23 @@ function SettingsEditor() {
         }
     };
 
+    const handleSaveRedeemCode = async (codeData: any) => {
+        setLoading(true);
+        try {
+            await setDoc(doc(db, 'redeem_codes', codeData.code), codeData);
+            setMsg(`Redeem code ${codeData.code} saved successfully!`);
+            setTimeout(() => setMsg(''), 3000);
+            await loadSettings(); // If RedeemCodeEditor relies on config updates, though it has its own list now.
+        } catch (e) {
+            console.error(e);
+            alert('Failed to save redeem code.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     // Helper for List Management
-    const ListEditor = ({ title, data, type, section }: { title: string, data: any, type: 'Slots' | 'Pins', section: string }) => {
+    const ListEditor = ({ title, data, type, section }: { title: string, data: any, type: 'Slots' | 'Pins' | 'GB' | 'Offers', section: string }) => {
         const [qty, setQty] = useState('');
         const [price, setPrice] = useState('');
 
@@ -197,7 +224,7 @@ function SettingsEditor() {
         return (
             <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700">
                 <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2">
-                    {type === 'Slots' ? <Briefcase size={16} /> : <Shield size={16} />}
+                    {type === 'Slots' ? <Briefcase size={16} /> : type === 'GB' ? <HardDrive size={16} /> : type === 'Offers' ? <Tag size={16} /> : <Shield size={16} />}
                     {title}
                 </h3>
 
@@ -219,13 +246,13 @@ function SettingsEditor() {
 
                 <div className="flex gap-2 items-end border-t border-zinc-200 dark:border-zinc-600 pt-3">
                     <div>
-                        <label className="block text-[10px] uppercase text-zinc-500 font-bold mb-1">Qty ({type})</label>
+                        <label className="block text-[10px] uppercase text-zinc-500 font-bold mb-1">{type === 'Offers' ? 'Title' : `Qty (${type})`}</label>
                         <input
-                            type="number"
+                            type={type === 'Offers' ? 'text' : 'number'}
                             value={qty}
                             onChange={e => setQty(e.target.value)}
-                            placeholder="e.g. 5"
-                            className="w-20 p-2 rounded border dark:bg-zinc-800 dark:border-zinc-600 dark:text-white text-sm"
+                            placeholder={type === 'Offers' ? 'e.g. 50% Off' : 'e.g. 5'}
+                            className="w-32 p-2 rounded border dark:bg-zinc-800 dark:border-zinc-600 dark:text-white text-sm"
                         />
                     </div>
                     <div className="flex-1">
@@ -293,6 +320,12 @@ function SettingsEditor() {
             <div className="grid md:grid-cols-2 gap-6">
                 <ListEditor title="Additional Project Slots" data={config.addSlots} type="Slots" section="addSlots" />
                 <ListEditor title="Additional Pin Slots" data={config.addPins} type="Pins" section="addPins" />
+                <ListEditor title="Additional Storage (GB)" data={config.addStorage} type="GB" section="addStorage" />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <OffersEditor config={config} onSave={(offersData) => handleSave('offers', offersData)} />
+                <RedeemCodeEditor config={config} onSave={handleSaveRedeemCode} />
             </div>
 
             {/* Limits */}
@@ -334,6 +367,34 @@ function SettingsEditor() {
                     </div>
                     <div className="mt-4 text-right">
                         <button onClick={() => handleSave('pins', config.pins)} className="bg-zinc-800 text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">Update Pins</button>
+                    </div>
+                </div>
+
+                {/* Storage Limits */}
+                <div className="bg-zinc-50 dark:bg-zinc-700/30 p-4 rounded-xl border border-zinc-200 dark:border-zinc-700 md:col-span-2">
+                    <h3 className="font-bold mb-4 dark:text-white flex items-center gap-2"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg> Default Storage Limits (MB)</h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {['free', 'pro', 'ultra'].map(plan => {
+                            // Convert bytes to MB for display
+                            const currentMB = Math.round((config.storageLimits[plan] || 0) / (1024 * 1024));
+                            return (
+                                <div key={plan}>
+                                    <label className="block text-xs uppercase text-zinc-500 font-bold mb-1">{plan}</label>
+                                    <input
+                                        type="number"
+                                        value={currentMB}
+                                        onChange={e => {
+                                            const newMB = parseInt(e.target.value) || 0;
+                                            setConfig({ ...config, storageLimits: { ...config.storageLimits, [plan]: newMB * 1024 * 1024 } });
+                                        }}
+                                        className="w-full p-2 rounded border dark:bg-zinc-800 dark:border-zinc-600 dark:text-white"
+                                    />
+                                </div>
+                            );
+                        })}
+                    </div>
+                    <div className="mt-4 text-right">
+                        <button onClick={() => handleSave('storageLimits', config.storageLimits)} className="bg-zinc-800 text-white px-3 py-1.5 rounded text-xs font-bold hover:opacity-90">Update Storage Limits</button>
                     </div>
                 </div>
             </div>
@@ -683,6 +744,11 @@ export default function AdminPage() {
                                                     <td className="py-4">
                                                         <div className="font-medium dark:text-zinc-200">{req.details}</div>
                                                         <div className="text-xs text-zinc-400 capitalize">{req.type}</div>
+                                                        {req.slipUrl && (
+                                                            <a href={req.slipUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline mt-1 inline-flex items-center gap-1 font-bold">
+                                                                View Slip
+                                                            </a>
+                                                        )}
                                                     </td>
                                                     <td className="py-4 font-bold text-zinc-700 dark:text-zinc-300">
                                                         LKR {req.amount}

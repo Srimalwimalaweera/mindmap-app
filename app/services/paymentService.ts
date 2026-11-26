@@ -1,7 +1,7 @@
 import { db } from "@/lib/firebase";
 import { collection, doc, getDoc, addDoc, updateDoc, serverTimestamp, query, where, getDocs, increment, runTransaction } from "firebase/firestore";
 
-export async function createPaymentRequest(userId: string, userEmail: string | null | undefined, data: { type: string, itemId: string, amount: number, details: string }) {
+export async function createPaymentRequest(userId: string, userEmail: string | null | undefined, data: { type: string, itemId: string, amount: number, details: string, slipUrl?: string }) {
     const userRef = doc(db, "users", userId);
     const userSnap = await getDoc(userRef);
     if (!userSnap.exists()) throw new Error("User not found");

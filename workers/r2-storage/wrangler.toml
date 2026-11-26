@@ -1,0 +1,11 @@
+name = "mindmap-r2-storage"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+
+[vars]
+FIREBASE_PROJECT_ID = "visual-markmap-studio"
+ALLOWED_ORIGINS = "http://localhost:3000,https://visual-mindmap-app.pages.dev"
+
+[[r2_buckets]]
+binding = "MINDMAP_BUCKET"
+bucket_name = "mindmap-data"

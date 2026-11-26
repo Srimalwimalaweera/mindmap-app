@@ -28,25 +28,29 @@ body {
 /* Custom Scrollbar for Code Elements */
 .code-scroll-container::-webkit-scrollbar,
 .code-textarea::-webkit-scrollbar,
-.fullscreen-code-container::-webkit-scrollbar {
+.fullscreen-code-container::-webkit-scrollbar,
+.table-scroll-container::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 .code-scroll-container::-webkit-scrollbar-track,
 .code-textarea::-webkit-scrollbar-track,
-.fullscreen-code-container::-webkit-scrollbar-track {
+.fullscreen-code-container::-webkit-scrollbar-track,
+.table-scroll-container::-webkit-scrollbar-track {
   background: rgba(0, 0, 0, 0.2);
   border-radius: 4px;
 }
 .code-scroll-container::-webkit-scrollbar-thumb,
 .code-textarea::-webkit-scrollbar-thumb,
-.fullscreen-code-container::-webkit-scrollbar-thumb {
+.fullscreen-code-container::-webkit-scrollbar-thumb,
+.table-scroll-container::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.2);
   border-radius: 4px;
 }
 .code-scroll-container::-webkit-scrollbar-thumb:hover,
 .code-textarea::-webkit-scrollbar-thumb:hover,
-.fullscreen-code-container::-webkit-scrollbar-thumb:hover {
+.fullscreen-code-container::-webkit-scrollbar-thumb:hover,
+.table-scroll-container::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.4);
 }
 
