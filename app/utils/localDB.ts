@@ -1,8 +1,9 @@
 const DB_NAME = 'MindMapDB';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const STORE_MAPS = 'maps';
 const STORE_MEDIA_CACHE = 'cache_media';
 const STORE_SETTINGS = 'cache_settings';
+const STORE_DRIVE_AUTH = 'drive_auth';
 
 const SETTINGS_KEY = 'user_cache_settings';
 const CLOUD_CACHE_PREFIX = 'cloud-cache-';
@@ -62,6 +63,9 @@ function getDB(): Promise<IDBDatabase | null> {
             }
             if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
                 db.createObjectStore(STORE_SETTINGS);
+            }
+            if (!db.objectStoreNames.contains(STORE_DRIVE_AUTH)) {
+                db.createObjectStore(STORE_DRIVE_AUTH);
             }
         };
         request.onsuccess = () => resolve(request.result);
@@ -379,4 +383,101 @@ export async function getCacheStats(): Promise<CacheStats> {
 
     stats.totalBytes = stats.mapsBytes + stats.imagesBytes + stats.videosBytes;
     return stats;
+}
+
+// --- Encrypted Persistent Google Drive Credential Storage (AES-GCM non-extractable key in IndexedDB) ---
+
+const DRIVE_KEY_RECORD = 'aes_key';
+const DRIVE_CRED_RECORD = 'cred_payload';
+
+export interface PersistedDriveAuth {
+    connected: boolean;
+    accessToken: string;
+    expiresAt: number;
+    connectedAt: number;
+}
+
+async function getOrCreateDriveCryptoKey(db: IDBDatabase): Promise<CryptoKey | null> {
+    if (typeof window === 'undefined' || !window.crypto?.subtle) return null;
+
+    const existing = await new Promise<CryptoKey | null>((resolve) => {
+        const tx = db.transaction(STORE_DRIVE_AUTH, 'readonly');
+        const req = tx.objectStore(STORE_DRIVE_AUTH).get(DRIVE_KEY_RECORD);
+        req.onsuccess = () => resolve((req.result as CryptoKey) || null);
+        req.onerror = () => resolve(null);
+    });
+    if (existing) return existing;
+
+    const key = await window.crypto.subtle.generateKey(
+        { name: 'AES-GCM', length: 256 },
+        false, // Non-extractable: key cannot be read out as raw bytes by scripts
+        ['encrypt', 'decrypt']
+    );
+
+    await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_DRIVE_AUTH, 'readwrite');
+        const req = tx.objectStore(STORE_DRIVE_AUTH).put(key, DRIVE_KEY_RECORD);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+
+    return key;
+}
+
+export async function saveEncryptedDriveAuth(payload: PersistedDriveAuth): Promise<void> {
+    const db = await getDB();
+    if (!db || !window.crypto?.subtle) return;
+    const key = await getOrCreateDriveCryptoKey(db);
+    if (!key) return;
+
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const encoded = new TextEncoder().encode(JSON.stringify(payload));
+    const cipher = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, encoded);
+
+    await new Promise<void>((resolve, reject) => {
+        const tx = db.transaction(STORE_DRIVE_AUTH, 'readwrite');
+        const req = tx.objectStore(STORE_DRIVE_AUTH).put({ iv: Array.from(iv), cipher }, DRIVE_CRED_RECORD);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+    });
+}
+
+export async function loadEncryptedDriveAuth(): Promise<PersistedDriveAuth | null> {
+    const db = await getDB();
+    if (!db || !window.crypto?.subtle) return null;
+
+    const record = await new Promise<{ iv: number[]; cipher: ArrayBuffer } | null>((resolve) => {
+        const tx = db.transaction(STORE_DRIVE_AUTH, 'readonly');
+        const req = tx.objectStore(STORE_DRIVE_AUTH).get(DRIVE_CRED_RECORD);
+        req.onsuccess = () => resolve((req.result as { iv: number[]; cipher: ArrayBuffer }) || null);
+        req.onerror = () => resolve(null);
+    });
+    if (!record) return null;
+
+    const key = await getOrCreateDriveCryptoKey(db);
+    if (!key) return null;
+
+    try {
+        const decrypted = await window.crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: new Uint8Array(record.iv) },
+            key,
+            record.cipher
+        );
+        return JSON.parse(new TextDecoder().decode(decrypted)) as PersistedDriveAuth;
+    } catch {
+        return null;
+    }
+}
+
+export async function clearEncryptedDriveAuth(): Promise<void> {
+    const db = await getDB();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+        const tx = db.transaction(STORE_DRIVE_AUTH, 'readwrite');
+        const store = tx.objectStore(STORE_DRIVE_AUTH);
+        store.delete(DRIVE_CRED_RECORD);
+        store.delete(DRIVE_KEY_RECORD);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+    });
 }

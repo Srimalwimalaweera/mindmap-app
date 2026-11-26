@@ -1,6 +1,12 @@
 'use client';
 
-import { getCachedMedia, setCachedMedia } from '../utils/localDB';
+import {
+    getCachedMedia,
+    setCachedMedia,
+    saveEncryptedDriveAuth,
+    loadEncryptedDriveAuth,
+    clearEncryptedDriveAuth,
+} from '../utils/localDB';
 
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const ROOT_FOLDER_NAME = 'VisualMindMapMedia';
@@ -22,6 +28,8 @@ export interface DriveStorageInfo {
 }
 
 let tokenState: TokenState | null = null;
+let driveLinkedPersisted = false;
+let authHydratedPromise: Promise<boolean> | null = null;
 let gsiScriptPromise: Promise<void> | null = null;
 
 declare global {
@@ -47,8 +55,34 @@ export function getGoogleDriveClientId(): string {
     return process.env.NEXT_PUBLIC_GOOGLE_DRIVE_CLIENT_ID || '';
 }
 
+export async function hydrateDriveAuth(): Promise<boolean> {
+    if (typeof window === 'undefined') return false;
+    if (tokenState && Date.now() < tokenState.expiresAt - 60_000) {
+        driveLinkedPersisted = true;
+        return true;
+    }
+    if (!authHydratedPromise) {
+        authHydratedPromise = loadEncryptedDriveAuth()
+            .then((saved) => {
+                if (saved?.connected) {
+                    driveLinkedPersisted = true;
+                    if (saved.accessToken && Date.now() < saved.expiresAt - 60_000) {
+                        tokenState = {
+                            accessToken: saved.accessToken,
+                            expiresAt: saved.expiresAt,
+                        };
+                    }
+                    return true;
+                }
+                return false;
+            })
+            .catch(() => false);
+    }
+    return authHydratedPromise;
+}
+
 export function isDriveConnected(): boolean {
-    return !!(tokenState && Date.now() < tokenState.expiresAt - 60_000);
+    return driveLinkedPersisted || !!(tokenState && Date.now() < tokenState.expiresAt - 60_000);
 }
 
 export function clearDriveToken(): void {
@@ -58,9 +92,12 @@ export function clearDriveToken(): void {
 export async function disconnectGoogleDrive(): Promise<void> {
     const token = tokenState?.accessToken;
     tokenState = null;
+    driveLinkedPersisted = false;
+    authHydratedPromise = null;
     if (typeof window !== 'undefined') {
         try {
             localStorage.removeItem(STORAGE_INFO_CACHE_KEY);
+            await clearEncryptedDriveAuth();
         } catch {
             // ignore
         }
@@ -89,7 +126,46 @@ function loadGsiScript(): Promise<void> {
     return gsiScriptPromise;
 }
 
+function requestTokenWithPrompt(clientId: string, promptMode: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const oauth2 = window.google?.accounts?.oauth2;
+        if (!oauth2) return reject(new Error('Google OAuth2 client unavailable'));
+
+        const client = oauth2.initTokenClient({
+            client_id: clientId,
+            scope: DRIVE_SCOPE,
+            callback: async (resp) => {
+                if (resp.error || !resp.access_token) {
+                    return reject(new Error(resp.error || 'Google Drive authorization failed'));
+                }
+                const expiresInMs = (resp.expires_in || 3600) * 1000;
+                const expiresAt = Date.now() + expiresInMs;
+                tokenState = {
+                    accessToken: resp.access_token,
+                    expiresAt,
+                };
+                driveLinkedPersisted = true;
+                try {
+                    await saveEncryptedDriveAuth({
+                        connected: true,
+                        accessToken: resp.access_token,
+                        expiresAt,
+                        connectedAt: Date.now(),
+                    });
+                } catch {
+                    // non-fatal if storage restricted
+                }
+                resolve(resp.access_token);
+            },
+        });
+
+        client.requestAccessToken({ prompt: promptMode });
+    });
+}
+
 export async function ensureDriveAccessToken(interactive: boolean = true): Promise<string> {
+    await hydrateDriveAuth();
+
     if (tokenState && Date.now() < tokenState.expiresAt - 60_000) {
         return tokenState.accessToken;
     }
@@ -101,29 +177,18 @@ export async function ensureDriveAccessToken(interactive: boolean = true): Promi
 
     await loadGsiScript();
 
-    return new Promise((resolve, reject) => {
-        const oauth2 = window.google?.accounts?.oauth2;
-        if (!oauth2) return reject(new Error('Google OAuth2 client unavailable'));
+    // If user previously connected Drive, attempt silent refresh first with zero popup
+    if (driveLinkedPersisted) {
+        try {
+            return await requestTokenWithPrompt(clientId, 'none');
+        } catch {
+            if (!interactive) {
+                throw new Error('Google Drive silent refresh failed');
+            }
+        }
+    }
 
-        const client = oauth2.initTokenClient({
-            client_id: clientId,
-            scope: DRIVE_SCOPE,
-            callback: (resp) => {
-                if (resp.error || !resp.access_token) {
-                    return reject(new Error(resp.error || 'Google Drive authorization failed'));
-                }
-                const expiresInMs = (resp.expires_in || 3600) * 1000;
-                tokenState = {
-                    accessToken: resp.access_token,
-                    expiresAt: Date.now() + expiresInMs,
-                };
-                resolve(resp.access_token);
-            },
-        });
-
-        // select_account ensures easy account picker popup on mobile & desktop
-        client.requestAccessToken({ prompt: interactive ? 'select_account' : 'none' });
-    });
+    return requestTokenWithPrompt(clientId, interactive ? 'select_account' : 'none');
 }
 
 async function fetchWithRetry(url: string, init: RequestInit, retries = 3): Promise<Response> {

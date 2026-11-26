@@ -13,6 +13,7 @@ import { sanitizeHtml, sanitizeUrl } from '@/app/utils/sanitize';
 import { getUserMindMaps, createMindMap, MindMapData } from '@/app/services/mindmapService';
 import {
     getGoogleDriveClientId,
+    hydrateDriveAuth,
     isDriveConnected,
     ensureDriveAccessToken,
     getDriveStorageInfo,
@@ -244,6 +245,7 @@ export default function NodeInputControl({ initialValue, onSubmit, onCancel, nod
     const hasDriveClient = !!getGoogleDriveClientId();
 
     const syncDriveState = async (forceRefresh = false) => {
+        await hydrateDriveAuth();
         const connected = isDriveConnected();
         setDriveConnected(connected);
         if (connected) {

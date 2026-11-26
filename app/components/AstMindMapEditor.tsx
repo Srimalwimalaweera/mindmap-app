@@ -223,57 +223,76 @@ const forceDownloadMedia = async (src: string) => {
 
 export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onRedo, canUndo = false, canRedo = false, onSave, currentMapId, blockedMapIds = [], onOpenLinkedMap }: EditorProps) {
     const resolvedMediaCacheRef = useRef<Map<string, string>>(new Map());
+    const hydrateRunIdRef = useRef<number>(0);
 
     const hydrateCachedImages = async (svgEl: SVGSVGElement | null) => {
         if (!svgEl) return;
-        const buttons = svgEl.querySelectorAll('.load-media-btn[data-type="image"]');
+        const buttons = Array.from(svgEl.querySelectorAll('.load-media-btn[data-type="image"]'));
         if (!buttons.length) return;
 
-        let hydratedAny = false;
-        await Promise.all(
-            Array.from(buttons).map(async (btn) => {
-                const src = btn.getAttribute('data-src');
+        // Sort nearest to viewport center first so closest visible images appear first
+        const svgRect = svgEl.getBoundingClientRect();
+        const centerX = svgRect.left + svgRect.width / 2;
+        const centerY = svgRect.top + svgRect.height / 2;
+
+        const sortedButtons = buttons
+            .map((btn) => {
                 const container = btn.closest('.media-placeholder-container');
-                if (!src || !container || deletedMediaSessionCache.has(src)) return;
-
-                let resolvedUrl = resolvedMediaCacheRef.current.get(src);
-                if (!resolvedUrl && src.startsWith('gdrive://')) {
-                    const withoutScheme = src.slice('gdrive://'.length);
-                    const [fileId, queryPart] = withoutScheme.split('?');
-                    const versionMatch = queryPart?.match(/v=([^&]+)/);
-                    const version = versionMatch ? versionMatch[1] : '1';
-                    const blob = await getCachedMedia(`gdrive:${fileId}`, version);
-                    if (blob) {
-                        resolvedUrl = URL.createObjectURL(blob);
-                        resolvedMediaCacheRef.current.set(src, resolvedUrl);
-                    }
-                } else if (!resolvedUrl) {
-                    const blob = await getCachedMedia(`url:${src}`);
-                    if (blob) {
-                        resolvedUrl = URL.createObjectURL(blob);
-                        resolvedMediaCacheRef.current.set(src, resolvedUrl);
-                    }
-                }
-
-                if (!resolvedUrl) return;
-
-                hydratedAny = true;
-                container.innerHTML = `
-                    <div style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden;">
-                        <img src="${resolvedUrl}" onload="window.dispatchEvent(new Event('media-loaded'))" style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);" />
-                        <button class="media-download-btn" data-src="${resolvedUrl}" title="Download Image" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        </button>
-                        <button class="media-fullscreen-btn" data-src="${resolvedUrl}" data-type="image" title="Full Screen" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
-                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
-                        </button>
-                    </div>
-                `;
+                const rect = (container || btn).getBoundingClientRect();
+                const elX = rect.left + rect.width / 2;
+                const elY = rect.top + rect.height / 2;
+                const distSq = (elX - centerX) ** 2 + (elY - centerY) ** 2;
+                return { btn, distSq };
             })
-        );
+            .sort((a, b) => a.distSq - b.distSq)
+            .map((item) => item.btn);
 
-        if (hydratedAny) {
-            mmRef.current?.fit();
+        const runId = ++hydrateRunIdRef.current;
+
+        // Hydrate cached images sequentially one-by-one in-place (zero map refresh/refit)
+        for (const btn of sortedButtons) {
+            if (hydrateRunIdRef.current !== runId) return; // Cancelled by newer render
+
+            const src = btn.getAttribute('data-src');
+            const container = btn.closest('.media-placeholder-container');
+            if (!src || !container || !container.isConnected || deletedMediaSessionCache.has(src)) continue;
+
+            let resolvedUrl = resolvedMediaCacheRef.current.get(src);
+            if (!resolvedUrl && src.startsWith('gdrive://')) {
+                const withoutScheme = src.slice('gdrive://'.length);
+                const [fileId, queryPart] = withoutScheme.split('?');
+                const versionMatch = queryPart?.match(/v=([^&]+)/);
+                const version = versionMatch ? versionMatch[1] : '1';
+                const blob = await getCachedMedia(`gdrive:${fileId}`, version);
+                if (blob) {
+                    resolvedUrl = URL.createObjectURL(blob);
+                    resolvedMediaCacheRef.current.set(src, resolvedUrl);
+                }
+            } else if (!resolvedUrl) {
+                const blob = await getCachedMedia(`url:${src}`);
+                if (blob) {
+                    resolvedUrl = URL.createObjectURL(blob);
+                    resolvedMediaCacheRef.current.set(src, resolvedUrl);
+                }
+            }
+
+            if (!resolvedUrl || hydrateRunIdRef.current !== runId || !container.isConnected) continue;
+
+            // Replace inside existing placeholder dimensions without triggering map fit/refresh
+            container.innerHTML = `
+                <div style="position:relative; width:100%; height:100%; border-radius:8px; overflow:hidden; animation: fadeIn 0.25s ease-out;">
+                    <img src="${resolvedUrl}" style="width:100%; height:100%; object-fit:contain; display:block; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.5);" />
+                    <button class="media-download-btn" data-src="${resolvedUrl}" title="Download Image" style="position: absolute; bottom: 8px; left: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    </button>
+                    <button class="media-fullscreen-btn" data-src="${resolvedUrl}" data-type="image" title="Full Screen" style="position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; padding: 4px; color: rgba(255,255,255,0.8); cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; z-index: 10;" onmouseover="this.style.color='#fff'; this.style.background='rgba(0,0,0,0.9)'" onmouseout="this.style.color='rgba(255,255,255,0.8)'; this.style.background='rgba(0,0,0,0.6)'">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path></svg>
+                    </button>
+                </div>
+            `;
+
+            // Yield to main thread between each image so pan/zoom stays 60fps
+            await new Promise((r) => setTimeout(r, 180));
         }
     };
     const { userData } = useAuth();
@@ -550,7 +569,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
 
                         mmRef.current.setData(root);
                         mmRef.current.fit();
-                        setTimeout(() => hydrateCachedImages(svgRef.current), 40);
+                        setTimeout(() => hydrateCachedImages(svgRef.current), 3000);
                     }
 
                     // Auto-hydrate cached images whenever collapsed nodes are expanded
@@ -559,7 +578,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
                         if (hydrateTimer) clearTimeout(hydrateTimer);
                         hydrateTimer = setTimeout(() => {
                             hydrateCachedImages(svgRef.current);
-                        }, 60);
+                        }, 450);
                     });
                     observer.observe(svgElement, { childList: true, subtree: true });
 
@@ -1199,7 +1218,7 @@ export default function AstMindMapEditor({ mapData, onMapDataChange, onUndo, onR
             try {
                 mmRef.current.setData(root);
                 mmRef.current.fit();
-                setTimeout(() => hydrateCachedImages(svgRef.current), 40);
+                setTimeout(() => hydrateCachedImages(svgRef.current), 600);
             } catch (e) {
                 console.error("Update error:", e);
             }

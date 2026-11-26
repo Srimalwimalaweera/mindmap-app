@@ -15,6 +15,7 @@ import { X, Check, Star, Settings, LogOut, User as UserIcon, Shield, Briefcase, 
 import { getCacheSettings, saveCacheSettings, getCacheStats, clearMediaCache, CacheSettings, CacheStats, DEFAULT_CACHE_SETTINGS } from '../utils/localDB';
 import {
     getGoogleDriveClientId,
+    hydrateDriveAuth,
     isDriveConnected,
     ensureDriveAccessToken,
     disconnectGoogleDrive,
@@ -627,7 +628,7 @@ export function SettingsModal({ isOpen, onClose }: { isOpen: boolean, onClose: (
 
     const loadCacheInfo = async () => {
         try {
-            const [cs, stats] = await Promise.all([getCacheSettings(), getCacheStats()]);
+            const [cs, stats] = await Promise.all([getCacheSettings(), getCacheStats(), hydrateDriveAuth()]);
             setCacheSettings(cs);
             setCacheStats(stats);
             const connected = isDriveConnected();
